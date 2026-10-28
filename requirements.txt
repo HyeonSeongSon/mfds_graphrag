@@ -1,0 +1,10 @@
+# 수집 · 적재 · 테스트 (conda env: mfds-graphrag). 버전 고정.
+requests==2.32.3
+lxml==5.3.0
+python-dotenv==1.0.1
+neo4j==5.26.0
+PyYAML==6.0.2
+pytest==8.3.3
+pandas==2.2.3
+pyarrow==17.0.0
+jsonschema==4.23.0

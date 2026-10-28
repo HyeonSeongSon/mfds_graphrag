@@ -1,0 +1,19 @@
+# secrets
+.env
+# data & models
+data/raw/*/
+!data/raw/*/manifest.tsv
+data/neo4j/
+data/cache/
+data/dumps/
+models/
+*.gguf
+*.safetensors
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+unsloth_compiled_cache/
+# tools
+tools/
+data/bakeoff/
