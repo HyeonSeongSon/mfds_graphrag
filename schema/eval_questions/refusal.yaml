@@ -1,0 +1,27 @@
+# 거절 세트 틀 (1주차 D4에 잠금). 답변 단계 정답은 세 종류 모두 거절(refuse=true).
+# Text2Cypher 정답(t2c_correct, PREREG 4-3): 범위 밖은 NO_QUERY만. 타 부처 법령 · 없는 조문은 NO_QUERY 또는
+# 오류 없이 실행되어 빈 결과를 내는 쿼리(맞는 쿼리를 짜서 결과가 비는 것은 정상 동작이라서).
+# 빈 결과 쿼리는 empty_query_must_contain의 값(질문의 법령명 또는 약칭, 조문 번호)이 쿼리 안에 값으로 있어야 정답.
+# uid로 찾는 쿼리(`{uid: 'art:001783:305'}`)는 uid 문자열 안의 법령ID · 조문 번호로 같은 조건을 인정한다.
+# 쓴 법령명 · 조문 번호는 exclusion_ids.json에 넣어 학습 데이터에서 뺀다.
+kinds:
+  other_ministry_law:
+    t2c_correct: no_query_or_empty
+    empty_query_must_contain: [law_name]
+    source: "전체 법령 목록에서 소관부처가 식약처가 아닌 법령명(시드 순서)"
+    templates:
+      - "{law_name} 제{article_no}조의 내용을 알려 주세요."
+      - "{law_name}에서 {topic}에 관한 규정은 어디에 있나요?"
+  missing_article:
+    t2c_correct: no_query_or_empty
+    empty_query_must_contain: [law_name, article_no]
+    source: "식약처 법령 + 그 법령에 없는 조문 번호(마지막 조 + 5 이상)"
+    templates:
+      - "{law_name} 제{article_no}조는 무엇을 정하고 있나요?"
+      - "{law_name} 제{article_no}조를 위반하면 어떤 처분을 받나요?"
+  out_of_scope:
+    t2c_correct: no_query
+    source: "식약처 소관 밖 주제 목록(세금 · 부동산 · 노동 · 교통 등)"
+    templates:
+      - "{topic}에 관한 법률 규정을 알려 주세요."
+      - "{topic} 관련해서 제가 받을 수 있는 처벌은 무엇인가요?"

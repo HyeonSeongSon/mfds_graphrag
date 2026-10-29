@@ -1,0 +1,105 @@
+# mfds-graphrag 그래프 스키마 v0.1 (단일 출처, 1주차 D4에 잠금)
+# 모든 노드는 uid(문자열, 라벨 안에서 유일)를 갖는다. 사람이 읽고 답변에 그대로 인용할 수 있는 형태다.
+# 설명 · 예시는 docs/schema.md. 성분 정규화 규칙은 mfds/ingredients.py.
+version: "0.1"
+
+id_rules:
+  law_id: "국가법령정보 법령ID(6자리 문자열, 개정돼도 같음). 법령일련번호(MST)는 버전마다 바뀌므로 속성으로만 둔다"
+  article_no: "조번호를 정수로, 가지번호가 있으면 '-가지'(제7조의2 → 7-2)"
+  paragraph_no: "항번호 ①→1. 항번호 없이 호만 있는 조는 항 자리에 0"
+  annex_no: "별표번호를 정수로, 가지번호가 있으면 '-가지'(별표 1의2 → 1-2)"
+  dur_name: "ing: 를 뗀 성분 이름(mfds/ingredients.py 정규화 결과, ':'는 '_')"
+  dur_suffix: "같은 rule_id가 여러 행에서 나오면 행 내용 sha256 순서로 2번째부터 '#2' · '#3'을 붙인다"
+
+nodes:
+  Law:
+    uid: "law:{law_id}"
+    example: "law:001783"
+    props: [law_id, mst, name, abbr, kind, ministry, effective]
+    source: "lawService target=law 기본정보"
+  Article:
+    uid: "art:{law_id}:{article_no}"
+    example: "art:001783:24-3"
+    props: [number, branch, title, text, effective_from, effective_to]
+    note: "number · branch는 정수(가지조문이 아니면 branch 0). 조문여부=전문(장 · 절 제목)은 노드로 만들지 않는다. effective_to null = 현행"
+  Paragraph:
+    uid: "par:{law_id}:{article_no}:{paragraph_no}"
+    example: "par:001783:44:1"
+    props: [no, text]
+  Item:
+    uid: "item:{law_id}:{article_no}:{paragraph_no}:{item_no}"
+    example: "item:001783:44:1:3"
+    props: [no, text]
+    note: "호가지번호는 item_no에 '-가지'. 목은 노드로 만들지 않고 호 text에 이어 붙인다"
+  Annex:
+    uid: "anx:{owner}:{annex_no}"
+    example: "anx:011794:1 (법령 별표), anx:adm2100000258212:3 (행정규칙 별표, owner = 'adm' + 행정규칙ID)"
+    props: [no, title, text, owner]
+    note: "본문이 비어 있는 별표(첨부파일만)는 text 빈 문자열로 두고 has_text=false"
+  AdminRule:
+    uid: "adm:{admrul_id}"
+    props: [admrul_id, serial, name, kind, ministry, issued, effective]
+    note: "admrul_id = 행정규칙ID(개정돼도 같음), serial = 행정규칙일련번호"
+  AdminArticle:
+    uid: "admart:{admrul_id}:{article_no}"
+    props: [number, branch, title, text]
+  Case:
+    uid: "case:{prec_id}"
+    props: [prec_id, case_no, court, date, holding, summary, ref_text]
+    note: "prec_id = 판례일련번호. ref_text = 참조조문 필드 원문(정답 출처라 추출 입력에서 뺀다)"
+  Interpretation:
+    uid: "expc:{expc_id}"
+    props: [expc_id, title, date, question, answer, reason]
+  AdminAppeal:
+    uid: "decc:{decc_id}"
+    props: [decc_id, title, date, order, claim, reason]
+  Disposition:
+    uid: "disp:food:{seq}"
+    example: "disp:food:20250000123456"
+    props: [seq, source, industry, violation_text, type, content, decided_at, law_ref_text]
+    note: "seq = DSPSDTLS_SEQ. violation_text는 원문에서 앞의 (YYYYMMDD) 날짜만 뗀 값. 업소명 · 주소 · 전화 · 대표자 · 인허가번호는 넣지 않는다"
+  Ingredient:
+    uid: "ing:{name}"
+    example: "ing:methotrexate, ing:atorvastatin + amlodipine"
+    props: [name, aliases, base, class_codes, contains, is_combination]
+    note: "고시 표기 단위. 다른 염은 다른 노드, base(염 제거형)는 검색 매칭에만"
+  DurRule:
+    uid: "dur:pair:{name_a}:{name_b} | dur:age:{name}:{age} | dur:preg:{name}"
+    example: "dur:pair:acemetacin:methotrexate, dur:age:acarbose:18세 이하, dur:preg:abacavir"
+    props: [type, annex, seq, form, condition_note, age, grade, text]
+    note: "pair의 두 이름은 정렬. text는 검색용 문장(벡터 인덱스 대상)"
+
+edges:
+  HAS_ARTICLE:   {from: [Law, AdminRule], to: [Article, AdminArticle], when: "1주차 D5", how: "XML 구조"}
+  HAS_PARAGRAPH: {from: Article, to: Paragraph, when: "1주차 D5", how: "XML 구조"}
+  HAS_ITEM:      {from: [Paragraph, Article], to: Item, when: "1주차 D5", how: "XML 구조(항이 없으면 조에서)"}
+  HAS_ANNEX:     {from: [Law, AdminRule], to: Annex, when: "1주차 D5", how: "XML 구조"}
+  SUBORDINATE_OF: {from: Law, to: Law, when: "1주차 D5", how: "법령체계도(시행령 → 법률, 시행규칙 → 시행령)"}
+  DELEGATES_TO:  {from: Article, to: Article, when: "1주차 D5", how: "3단비교(knd=2) 법률조문 → 시행령 · 시행규칙조문. 대상이 식약처 87개 법령일 때만"}
+  CITES:         {from: [Article, Paragraph, Item, AdminArticle], to: [Article, Paragraph], when: "1주차 D5", how: "mfds/refs.py",
+                  props: [raw, historical]}
+  BASED_ON_LAW:  {from: AdminRule, to: [Article, Paragraph], when: "1주차 D5", how: "고시 본문의 근거 조항 + refs.py"}
+  BASED_ON:      {from: Disposition, to: [Article, Paragraph], when: "1주차 D5", how: "LAWORD_CD_NM + refs.py"}
+  REFERENCES:    {from: [Case, Interpretation, AdminAppeal], to: [Article, Paragraph], props: [source, historical],
+                  when: "1주차 D5(source=field) · 2주차 D2(source=extracted, 필드 없는 문서만)", how: "참조조문 필드 + refs.py / API 추출 + refs.py"}
+  CITES_CASE:    {from: Case, to: Case, when: "1주차 D5", how: "참조판례 필드"}
+  INTERPRETS:    {from: Interpretation, to: [Article, Paragraph], when: "2주차 D2", how: "API 추출"}
+  APPLIES:       {from: AdminAppeal, to: [Article, Paragraph], when: "2주차 D2", how: "API 추출"}
+  INVOLVES:      {from: DurRule, to: Ingredient, when: "1주차 D5", how: "병용금기 고시 별표 1~3"}
+  CONTRAINDICATED_WITH: {from: Ingredient, to: Ingredient, props: [rule_id], when: "1주차 D5", how: "별표 1 행마다 한 방향(name_a → name_b, 정렬 순)"}
+  DEFINED_IN:    {from: DurRule, to: Annex, when: "1주차 D5", how: "병용금기 고시 별표"}
+  HAS_COMPONENT: {from: Ingredient, to: Ingredient, when: "1주차 D5", how: "복합제 표기 'A + B'"}
+
+# historical: refs.py가 구법 참조(`구 X법(… 개정되기 전의 것) 제N조`)로 표시한 엣지. 적재는 하되 그래프 확장 ·
+#             정답 Cypher 템플릿에서 뺀다(전부개정으로 번호가 바뀌었으면 현행 같은 번호 조문이 엉뚱한 조문이다)
+
+# Text2Cypher 프롬프트의 스키마 요약에 반드시 넣는 조회 속성. 평가 문항의 슬롯 라벨은 이 속성으로 찾을 수 있어야 한다
+text2cypher_lookup:
+  Ingredient: "name (정규화한 이름, 소문자) · aliases · base"
+  Article: "Law.name + Article.number · branch (「약사법 제23조의2」 → name '약사법', number 23, branch 2)"
+  Law: "name · abbr · kind"
+  Case: "court · case_no (「대법원 2025도16747 판결」)"
+  Disposition: "violation_text · industry · type"
+  DurRule: "type (pair | age | preg)"
+
+out_of_scope: [Term 노드, 법령 연혁(시점 질의), 첨부파일 고시 본문(식품공전 등), 의약품 처분 · 품목 매핑]

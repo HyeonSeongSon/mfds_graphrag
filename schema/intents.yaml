@@ -1,0 +1,117 @@
+# Text2Cypher 의도 목록 (1주차 D4에 잠금)
+# use: eval = 평가용(정답 Cypher 템플릿이 schema/eval_cypher/<name>.cypher에 있음, 학습 데이터에 같은 의도를 쓸지는 heldout으로 정함)
+#      train = 학습용만(템플릿은 3주차 D1에 만든다, 평가 문항에 나오지 않음)
+# slots: 이름 → 노드 라벨(값은 uid) 또는 리터럴 종류. 문장 템플릿은 schema/eval_questions/.
+# 평가용 의도의 슬롯은 정답이 비지 않고 정답 결과가 200행 이하인 것만 뽑는다(PREREG 4-2). n = 의도별 문항 수(PREREG 4-2 표).
+version: "0.1"
+
+# held-out 의도(PREREG 4-3): 후보는 형제 의도를 묶은 T4 하위 유형 4단위. t2(200문항)와 T6 의도(12~13문항)는 뺀다.
+# 1주차 D4에 시드로 단위 순서를 섞고 차례로 담되, 누적 test 문항이 110을 넘게 되는 단위는 건너뛰고 누적 80 이상이면 멈춘다.
+# 고른 단위의 의도 전부를 학습 데이터 · 기준선 few-shot에서 뺀다.
+heldout_units:
+  m1: [m1_delegated_articles]
+  m2: [m2_case_ref_delegated, m2_disposition_basis_delegated]
+  m3: [m3_pair_and_pregnancy, m3_pair_and_age]
+  m4: [m4_citing_articles]
+heldout_cap: 110
+heldout_min: 80
+heldout_intents: null
+
+intents:
+  # ---- 평가용 (T2 · T4 · T6) ----
+  - name: t2_pair_contraindication
+    use: eval
+    n: {dev: 30, test: 200}
+    type: T2
+    description: 두 성분의 병용금기 여부와 근거 DurRule
+    slots: {ing_a: Ingredient, ing_b: Ingredient}
+    returns: "ing_a, ing_b, verdict(금기|해당없음), rule_ids"
+  - name: m1_delegated_articles
+    use: eval
+    n: {dev: 8, test: 60}
+    type: T4-M1
+    description: 법률 조문이 위임한 하위 법령(시행령 또는 총리령) 조문
+    slots: {article: Article, target_kind: "대통령령 | 총리령"}
+    returns: "uid 목록"
+  - name: m2_case_ref_delegated
+    use: eval
+    n: {dev: 4, test: 30}
+    type: T4-M2
+    description: 판례의 참조조문(필드 기준)을 위임받은 시행령 조문
+    slots: {case: Case}
+    returns: "uid 목록"
+  - name: m2_disposition_basis_delegated
+    use: eval
+    n: {dev: 4, test: 30}
+    type: T4-M2
+    description: 처분 근거 조문을 위임받은 하위 법령 조문. 슬롯은 평가용 그래프에서 위반 문구가 유일한 처분만
+    slots: {disposition: Disposition}
+    returns: "uid 목록"
+  - name: m3_pair_and_pregnancy
+    use: eval
+    n: {dev: 4, test: 25}
+    type: T4-M3
+    description: 성분 X와 병용금기이면서 임부금기인 성분
+    slots: {ingredient: Ingredient}
+    returns: "uid 목록(성분)"
+  - name: m3_pair_and_age
+    use: eval
+    n: {dev: 4, test: 25}
+    type: T4-M3
+    description: 성분 X와 병용금기이면서 특정연령대 금기인 성분
+    slots: {ingredient: Ingredient}
+    returns: "uid 목록(성분)"
+  - name: m4_citing_articles
+    use: eval
+    n: {dev: 6, test: 30}
+    type: T4-M4
+    description: 조문 X를 인용하는 조문(법령 · 고시, 조문 단위)
+    slots: {article: Article}
+    returns: "uid 목록(Article · AdminArticle)"
+  - name: t6_dispositions_by_article
+    use: eval
+    n: {dev: 3, test: 13}
+    type: T6
+    description: 조문 X(그 항 포함)를 근거로 한 처분 건수
+    slots: {article: Article}
+    returns: "n"
+  - name: t6_dispositions_by_industry_type
+    use: eval
+    n: {dev: 3, test: 13}
+    type: T6
+    description: 업종 · 처분 유형별 처분 건수
+    slots: {industry: "업종명(처분 데이터 값)", disp_type: "처분 유형(처분 데이터 값)"}
+    returns: "n"
+  - name: t6_pair_rules_by_ingredient
+    use: eval
+    n: {dev: 2, test: 12}
+    type: T6
+    description: 성분 X가 포함된 병용금기 규칙 수
+    slots: {ingredient: Ingredient}
+    returns: "n"
+  - name: t6_delegated_count
+    use: eval
+    n: {dev: 2, test: 12}
+    type: T6
+    description: 법률 조문 X가 위임한 하위 법령 조문 수
+    slots: {article: Article}
+    returns: "n"
+
+  # ---- 학습용 ----
+  - {name: article_text, use: train, description: 조문 본문 조회, slots: {article: Article}}
+  - {name: paragraph_text, use: train, description: 항 본문 조회, slots: {paragraph: Paragraph}}
+  - {name: articles_by_title_keyword, use: train, description: 법령 안에서 제목에 키워드가 든 조문, slots: {law: Law, keyword: 문자열}}
+  - {name: law_decree_and_rule, use: train, description: 법률의 시행령 · 시행규칙(하위 법령), slots: {law: Law}}
+  - {name: parent_act_article, use: train, description: 시행령 조문에 위임한 법률 조문(M1 역방향), slots: {article: Article}}
+  - {name: dur_rules_of_ingredient, use: train, description: 성분이 들어간 DUR 규칙 전부(유형 무관), slots: {ingredient: Ingredient}}
+  - {name: age_limit_of_ingredient, use: train, description: 성분의 특정연령대 금기 기준과 제형, slots: {ingredient: Ingredient}}
+  - {name: pregnancy_grade_of_ingredient, use: train, description: 성분의 임부금기 등급, slots: {ingredient: Ingredient}}
+  - {name: combination_components, use: train, description: 복합제의 구성 성분, slots: {ingredient: Ingredient}}
+  - {name: ingredient_by_alias, use: train, description: 별칭 · 염 제거형으로 성분 찾기, slots: {alias: 문자열}}
+  - {name: annex_of_law, use: train, description: 법령의 별표 목록 · 제목, slots: {law: Law}}
+  - {name: admin_rules_based_on_article, use: train, description: 조문을 근거로 한 고시, slots: {article: Article}}
+  - {name: cases_referencing_article, use: train, description: 조문을 참조조문으로 둔 판례, slots: {article: Article}}
+  - {name: dispositions_by_article_list, use: train, description: 조문을 근거로 한 처분 목록(업종 · 유형), slots: {article: Article}}
+  - {name: dispositions_count_by_industry, use: train, description: 업종별 처분 건수(유형 무관), slots: {industry: 문자열}}
+  - {name: articles_cited_by_article, use: train, description: 조문 X가 인용하는 조문(M4 정방향), slots: {article: Article}}
+  - {name: no_query, use: train, description: "범위 밖 질문(식약처 소관 밖 주제) → NO_QUERY. 타 부처 법령 · 없는 조문은 일반 쿼리로(결과가 비면 정상)", slots: {}}

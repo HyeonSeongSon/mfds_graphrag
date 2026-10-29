@@ -1,7 +1,7 @@
 # secrets
 .env
 # data & models
-data/raw/*/
+data/raw/*/*
 !data/raw/*/manifest.tsv
 data/neo4j/
 data/cache/
