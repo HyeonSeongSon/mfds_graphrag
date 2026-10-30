@@ -13,8 +13,9 @@ from pathlib import Path
 from dotenv import dotenv_values
 from lxml import etree
 
-from mfds.collect.common import ROOT, list_items
-from mfds.collect.foodsafety import PII, read_rows
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # `python scripts/check_snapshot.py`로도 실행되게
+from mfds.collect.common import ROOT, list_items  # noqa: E402
+from mfds.disposition import PII, TEXT_FIELDS, read_rows  # noqa: E402
 
 problems: list[str] = []
 
@@ -70,6 +71,10 @@ def main() -> None:
                 weak_hits.append(t)
     check(not leak, f"git 추적 · 추적 예정 파일 {len(tracked)}개에 업소 정보 값 없음 (발견 파일 {len(leak)})")
     print(f"- 참고: 4자 업소명과 같은 낱말이 있는 파일 {len(weak_hits)}개(일반어 일치 가능, 값은 출력하지 않음)")
+    # 위반 · 처분 내용 원문에 그 업소의 업소명 · 인허가번호가 든 행이 있다 → read_rows가 가린 뒤에는 0이어야 한다
+    own = sum(1 for r in raw for f in TEXT_FIELDS for c, n in (("PRCSCITYPOINT_BSSHNM", 2), ("LCNS_NO", 6))
+              if len(v := re.sub(r"[\s\-]", "", r.get(c) or "")) >= n and v in re.sub(r"[\s\-]", "", r.get(f) or ""))
+    check(own == 0, f"read_rows 텍스트 열에 그 업소의 업소명 · 인허가번호 없음 (발견 {own})")
     raw_tracked = [t for t in tracked if t.startswith("data/raw/") and not t.endswith("manifest.tsv")]
     check(not raw_tracked, f"원자료가 git 추적 대상 아님 (발견 {len(raw_tracked)})")
 

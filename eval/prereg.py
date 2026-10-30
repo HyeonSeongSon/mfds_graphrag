@@ -31,6 +31,7 @@ LOCK_TARGETS = [
     "eval/m4_candidates.py",
     "mfds/refs.py",
     "mfds/ingredients.py",
+    "mfds/disposition.py",
     "schema/schema.yaml",
     "schema/intents.yaml",
     "schema/eval_cypher",

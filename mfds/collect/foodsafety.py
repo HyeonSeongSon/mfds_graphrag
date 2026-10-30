@@ -5,14 +5,12 @@
 
 원본 스냅숏(git 제외)에는 업소 정보가 남는다. 읽을 때는 `read_rows`가 기본으로 업소 정보 열을 지운다.
 업소 정보가 필요한 곳은 평가셋 생성기의 같은 업소 이웃 조건뿐이고, 메모리에서만 쓴다(`keep_pii=True`).
+`PII` · `read_rows`는 잠금 대상 `mfds/disposition.py`에 있고 여기서는 같은 이름으로 다시 내보낸다.
 
     python -m mfds.collect.foodsafety [--snapshot data/raw/YYYYMMDD] [--source <수동 수집 CSV>]
 """
 
 import argparse
-import csv
-import gzip
-import io
 import json
 import os
 from pathlib import Path
@@ -20,12 +18,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from mfds.collect.common import RAW, ROOT, Collector, FetchError, snapshot_dir
+from mfds.disposition import PII, SERVICE, read_rows  # noqa: F401  (기존 이름 그대로 내보냄)
 
-SERVICE = "I0470"
 PAGE = 1000
 FOOD_API = "http://openapi.foodsafetykorea.go.kr/api"
-# 업소명 · 주소 · 전화 · 대표자 · 인허가번호
-PII = ("PRCSCITYPOINT_BSSHNM", "ADDR", "TELNO", "PRSDNT_NM", "LCNS_NO")
 MANUAL = RAW / "20261028" / "foodsafety" / f"{SERVICE}.csv.gz"
 MANUAL_NOTE = "사용자 수동 수집, 2026-10-28"
 
@@ -58,22 +54,6 @@ def collect_api(c: Collector, key: str) -> int:
 def collect_copy(c: Collector, src: Path) -> int:
     c.copy_in("foodsafety", SERVICE, f"foodsafety/{SERVICE}.csv.gz", src, MANUAL_NOTE)
     return len(read_rows(c.snapshot))
-
-
-def read_rows(snapshot: Path, keep_pii: bool = False) -> list[dict[str, str]]:
-    """스냅숏의 I0470 행(수동 수집 CSV 또는 API JSON). 기본으로 업소 정보 열을 지운다."""
-    path = snapshot / "foodsafety" / f"{SERVICE}.csv.gz"
-    if path.exists():
-        with gzip.open(path, "rb") as f:
-            rows = list(csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig")))
-    else:
-        pages = sorted((snapshot / "foodsafety" / SERVICE).glob("*.json"))
-        if not pages:
-            raise FileNotFoundError(f"{snapshot}에 {SERVICE}가 없다")
-        rows = [r for p in pages for r in json.loads(p.read_bytes())[SERVICE].get("row", [])]
-    if not keep_pii:
-        rows = [{k: v for k, v in r.items() if k not in PII} for r in rows]
-    return rows
 
 
 def main() -> None:

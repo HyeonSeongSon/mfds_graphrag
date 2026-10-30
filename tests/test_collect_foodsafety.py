@@ -84,3 +84,23 @@ def test_read_rows_from_json_fixture(tmp_path: Path) -> None:
     d.mkdir(parents=True)
     shutil.copy(FIX / "food_disposition_I0470_5rows.json", d / "000001.json")
     assert len(foodsafety.read_rows(tmp_path)) == 5
+
+
+def test_scrub_masks_own_business_values_in_text() -> None:
+    """위반 · 처분 내용 원문 안의 그 업소 정보는 가린다(가짜 값). 짧은 값 · 다른 열은 그대로."""
+    from mfds.disposition import scrub
+    row = {"PRCSCITYPOINT_BSSHNM": "가나다 식품", "LCNS_NO": "20190012345", "PRSDNT_NM": "", "ADDR": "", "TELNO": "",
+           "VILTCN": "(20250101) 가나다식품에서 제조한 제품(품목번호 2019-0012345-001) 표시 위반",
+           "DSPSCN": "가나다 식품 영업정지 7일", "INDUTY_CD_NM": "식품제조가공업"}
+    out = scrub(row)
+    assert out["VILTCN"] == "(20250101) <업소명>에서 제조한 제품(품목번호 <인허가번호>-001) 표시 위반"
+    assert out["DSPSCN"] == "<업소명> 영업정지 7일"
+    assert out["INDUTY_CD_NM"] == row["INDUTY_CD_NM"] and out["PRCSCITYPOINT_BSSHNM"] == row["PRCSCITYPOINT_BSSHNM"]
+    short = scrub({**row, "PRCSCITYPOINT_BSSHNM": "가", "LCNS_NO": "123"})
+    assert "가나다식품" in short["VILTCN"] and "<" not in short["VILTCN"]
+
+
+def test_has_mask_marks_only_scrub_output() -> None:
+    from mfds.disposition import has_mask
+    assert has_mask("<업소명>에서 제조한 제품") and has_mask("품목번호 <인허가번호>-001")
+    assert not has_mask("유통기한 <1개월> 경과") and not has_mask("") and not has_mask(None)

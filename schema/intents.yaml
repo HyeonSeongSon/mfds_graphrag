@@ -44,7 +44,7 @@ intents:
     use: eval
     n: {dev: 4, test: 30}
     type: T4-M2
-    description: 처분 근거 조문을 위임받은 하위 법령 조문. 슬롯은 평가용 그래프에서 위반 문구가 유일한 처분만
+    description: 처분 근거 조문을 위임받은 하위 법령 조문. 슬롯은 평가용 그래프에서 위반 문구가 유일하고, 가림 표시 · 조문 표기가 없는 처분만
     slots: {disposition: Disposition}
     returns: "uid 목록"
   - name: m3_pair_and_pregnancy

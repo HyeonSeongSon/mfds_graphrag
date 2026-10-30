@@ -9,7 +9,7 @@ id_rules:
   paragraph_no: "항번호 ①→1. 항번호 없이 호만 있는 조는 항 자리에 0"
   annex_no: "별표번호를 정수로, 가지번호가 있으면 '-가지'(별표 1의2 → 1-2)"
   dur_name: "ing: 를 뗀 성분 이름(mfds/ingredients.py 정규화 결과, ':'는 '_')"
-  dur_suffix: "같은 rule_id가 여러 행에서 나오면 행 내용 sha256 순서로 2번째부터 '#2' · '#3'을 붙인다"
+  dur_suffix: "같은 rule_id가 여러 행에서 나오면 행 내용 sha256 순서로 2번째부터 '#2' · '#3'을 붙인다. 행 내용 = 연번을 뺀 별표 칸(mfds/collect/dur.py ANNEX_COLUMNS 순서)을 탭으로 이은 UTF-8 문자열, 해시가 같으면 연번 순"
 
 nodes:
   Law:
@@ -25,16 +25,16 @@ nodes:
   Paragraph:
     uid: "par:{law_id}:{article_no}:{paragraph_no}"
     example: "par:001783:44:1"
-    props: [no, text]
+    props: ["no", text]
   Item:
     uid: "item:{law_id}:{article_no}:{paragraph_no}:{item_no}"
     example: "item:001783:44:1:3"
-    props: [no, text]
+    props: ["no", text]
     note: "호가지번호는 item_no에 '-가지'. 목은 노드로 만들지 않고 호 text에 이어 붙인다"
   Annex:
     uid: "anx:{owner}:{annex_no}"
     example: "anx:011794:1 (법령 별표), anx:adm2100000258212:3 (행정규칙 별표, owner = 'adm' + 행정규칙ID)"
-    props: [no, title, text, owner]
+    props: ["no", title, text, owner, has_text]
     note: "본문이 비어 있는 별표(첨부파일만)는 text 빈 문자열로 두고 has_text=false"
   AdminRule:
     uid: "adm:{admrul_id}"

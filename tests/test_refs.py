@@ -210,6 +210,13 @@ def test_law_names_without_spaces(r) -> None:
     assert reasons(r, "「112신고의운영및처리에관한법률」 제3조") == ["not_mfds"]
 
 
+def test_two_letter_law_name_is_not_context_law(r) -> None:
+    """「」 없는 두 글자 법령명(`형법` · `민법`) 뒤 조문을 지금 법령의 조문으로 읽지 않는다."""
+    assert uids(r, "형법 제30조에 따라", YAKSA, "3") == []
+    assert uids(r, "약사법 제23조, 민법 제5조", YAKSA, "3") == [f"art:{YAKSA}:23"]
+    assert reasons(r, "형법 제12조") != ["no_context"]
+
+
 def test_unknown_quoted_law(r) -> None:
     assert reasons(r, "「전자정부법」 제36조제1항", RULE) == ["unknown_law"]
 

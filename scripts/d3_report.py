@@ -1,46 +1,30 @@
-"""1주차 D3 수집 보고: 실측 대조, 결정문 범위, DUR 연번, M3 염 형태, T3 표본 가능성(개략), 전체 본문 refs.py 해석률.
+"""1주차 D3 수집 보고: 실측 대조, 결정문 범위, DUR 연번, M3 염 형태, T1 · T3 표본 가능성(`eval/grouping.py`), 전체 본문 refs.py 해석률.
 
 스냅숏(git 제외)을 읽고 집계만 출력한다. 업소 정보 · 판결문 본문은 출력하지 않는다. 테스트가 아니다(`tests/`는 고정 자료만).
-T3는 D4 dry-run 전 개략 확인이다: 같은 사건번호 묶음, 판결요지 5-gram Jaccard 0.8 이웃, 이웃 포함 50건 이하,
-대표 조문당 20 상한까지 본다. dev-test 충돌은 세지 않는다(D4 dry-run).
+T1 · T3는 D4 dry-run 전 확인이다: 묶음, 5-gram Jaccard 0.8 이웃(T1은 같은 업소 포함), 이웃 포함 50건 이하,
+대표 조문당 20 상한. 시드 대신 고정 순서로 세고, 시드 순서 결과는 D4 dry-run에서 낸다.
 
     python scripts/d3_report.py data/raw/20261029
 """
 
-import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
 from lxml import etree
 
-from mfds.collect import dur
-from mfds.collect.foodsafety import read_rows
-from mfds.ingredients import normalize
-from mfds.refs import LawDict, Resolver, article_set
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # `python scripts/d3_report.py`로도 실행되게
+from mfds.collect import dur  # noqa: E402
+from mfds.disposition import has_mask, read_rows  # noqa: E402
+from mfds.ingredients import normalize  # noqa: E402
+from mfds.refs import LawDict, Resolver, article_set  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "eval"))
+from grouping import (CAP_PER_ARTICLE, NearDup, SameKey, build_candidates, case_key, clean_html,  # noqa: E402
+                      exact_groups, has_article_ref, mask_article_refs, normalize_violation, select, t3_text)
 
 EXPECTED = {"식약처 법령": 87, "법령 조문": 3745, "행정규칙": 513, "식품 처분(고유)": 5417}
-CAP, NEIGHBOR_MAX, JACCARD = 20, 50, 0.8
-TAG = re.compile(r"<[^>]+>")
-
-
-def text(s: str | None) -> str:
-    return re.sub(r"\s+", " ", TAG.sub(" ", s or "")).strip()
-
-
-def grams(s: str, n: int = 5) -> set[str]:
-    s = re.sub(r"\s+", "", s)
-    return {s[i:i + n] for i in range(len(s) - n + 1)}
-
-
-def jaccard(a: set[str], b: set[str]) -> float:
-    return len(a & b) / len(a | b) if a and b else 0.0
-
-
-def art_key(uid: str) -> tuple:
-    _, lid, num = uid.split(":", 2)
-    main, _, branch = num.partition("-")
-    return lid, int(main), int(branch or 0)
+text = clean_html
 
 
 def section(title: str) -> None:
@@ -115,65 +99,96 @@ def report_dur(S: Path) -> None:
           f" (기준 5%)")
 
 
-def report_t3(S: Path, laws: LawDict, arts: set[str]) -> None:
-    section("4. T3 표본 가능성(개략)")
+def _pool_report(name: str, cands: list, total_docs: int, freq: Counter, answers_of: dict[str, list[str]]) -> None:
+    """후보 → 표본 조건 · 상한 후 채울 수 있는 수, 제외 규모, 정답 조문의 남은 원천 수(층별 hit@5 대비)."""
+    sizes = [len(c.excluded) for c in cands]
+    print(f"- {name} 정답 있는 묶음 {len(cands):,}개, 이웃 포함 50건 이하 {sum(c.ok for c in cands):,}개 "
+          f"(크기 1: {sum(s == 1 for s in sizes)}, 2~5: {sum(2 <= s <= 5 for s in sizes)}, "
+          f"6~50: {sum(6 <= s <= 50 for s in sizes)}, 50 초과: {sum(s > 50 for s in sizes)})")
+    order = sorted(cands, key=lambda c: c.key)  # 시드와 무관한 고정 순서(시드는 PREREG에서 정한 뒤 dry-run에서만 씀)
+    full = select(order, freq, n_test=10 ** 6, n_dev=0)  # 상한까지 전부 뽑은 경우
+    reps = Counter(c.rep for c in full.test)
+    print(f"- 대표 조문 {len(reps)}종, 상위 5개 묶음 수 {[n for _, n in Counter(c.rep for c in order if c.ok).most_common(5)]}")
+    print(f"- 대표 조문당 {CAP_PER_ARTICLE} 상한 후 채울 수 있는 {name} 문항: **{full.fillable}** (필요 230) → "
+          f"{'충족' if full.fillable >= 230 else '부족: D4 잠금 전 대체 규칙(4-2) 검토'}")
+    sel = select(order, freq, n_test=200, n_dev=30)
+    excl = set().union(*(c.excluded for c in sel.test + sel.dev)) if sel.test else set()
+    print(f"- 고정 순서로 test 200 · dev 30을 뽑으면: test {len(sel.test)} · dev {len(sel.dev)}(충돌로 버린 dev "
+          f"{sel.dev_dropped}), 제외 {len(excl):,}건 = 전체 {total_docs:,}의 {len(excl) / total_docs:.1%} (기준 30%)")
+    taken = set().union(*(c.excluded for c in full.test)) if full.test else set()
+    left = Counter(a for i, ans in answers_of.items() if i not in taken for a in set(ans))
+    zero = sum(left[c.rep] == 0 for c in full.test)
+    thin = sum(0 < left[c.rep] < 5 for c in full.test)
+    print(f"- 상한까지 다 뽑았을 때 대표 조문의 남은 원천: 0건 {zero} · 1~4건 {thin} / {len(full.test)}")
+
+
+def report_t1_t3(S: Path, laws: LawDict, arts: set[str]) -> None:
+    section("4. T1 · T3 표본 가능성(`eval/grouping.py`)")
     r = Resolver(laws, arts)
-    precs, drop = {}, Counter()
     freq: Counter = Counter()  # 대표 조문 빈도: 같은 스냅숏 전체(제외 전)에서 근거가 된 처분 · 판례 수(4-2)
+
+    rows = read_rows(S, keep_pii=True)  # 업소 키는 이 함수 안 메모리에서만 쓴다
+    t1_ans = {r_["DSPSDTLS_SEQ"]: r.resolve(r_["LAWORD_CD_NM"]).article_uids for r_ in rows}
+    for ans in t1_ans.values():
+        freq.update(set(ans))
+    t1_text = {r_["DSPSDTLS_SEQ"]: r_["VILTCN"] for r_ in rows}
+    same = SameKey({r_["DSPSDTLS_SEQ"]: (r_.get("PRCSCITYPOINT_BSSHNM") or "") + (r_.get("ADDR") or "")
+                    if (r_.get("PRCSCITYPOINT_BSSHNM") or "").strip() else "" for r_ in rows})
+    del rows
+
+    precs, case_of, t3_ans, drop = {}, {}, {}, Counter()
     for p in sorted((S / "decisions/prec/body").glob("*.xml")):
         root = etree.parse(str(p)).getroot()
-        ref, summ = text(root.findtext("참조조문")), text(root.findtext("판결요지"))
-        precs[p.stem] = {"case": root.findtext("사건번호") or p.stem, "summary": summ, "answer": []}
+        f = {c.tag: c.text for c in root}
+        precs[p.stem] = t3_text(f)
+        case_of[p.stem] = f.get("사건번호") or p.stem
+        ref = text(f.get("참조조문"))
         if not ref:
             drop["참조조문 없음"] += 1
             continue
         res = r.resolve(ref)
         current = list(dict.fromkeys(x.article_uid for x in res.refs if not x.historical))
-        freq.update(set(current))  # 판결요지가 없어 문항이 못 되는 판례도 빈도에는 센다
-        if not summ:
-            drop["판결요지 없음"] += 1
-            continue
-        if not current:
+        freq.update(set(current))  # 질문 텍스트가 없어 문항이 못 되는 판례도 빈도에는 센다
+        if not precs[p.stem]:
+            drop["판결요지 · 판시사항 모두 없음"] += 1
+        elif not current:
             if res.refs:
                 drop["구법 참조만"] += 1
-            elif res.failures and all(f.reason == "not_mfds" for f in res.failures):
+            elif res.failures and all(x.reason == "not_mfds" for x in res.failures):
                 drop["타 부처 법령만"] += 1
             else:
                 drop["그 밖의 해석 실패(옛 법령 · 맥락 없음 등)"] += 1
-            continue
-        precs[p.stem]["answer"] = current
-    usable = {i: v for i, v in precs.items() if v["answer"]}
-    print(f"- 법원 판례 {len(precs):,} → 정답 있는 판례 {len(usable):,} (뺀 수 {dict(drop)})")
+        else:
+            t3_ans[p.stem] = current
+    fallback = sum(1 for i in t3_ans if not clean_html(etree.parse(str(S / f"decisions/prec/body/{i}.xml"))
+                                                        .getroot().findtext("판결요지")))
 
-    for row in read_rows(S):
-        freq.update(set(r.resolve(row["LAWORD_CD_NM"]).article_uids))
+    t1_groups = exact_groups(t1_text, normalize_violation)
+    # 위반 문구에 가림 표시가 든 처분은 문항 원천으로 뽑지 않는다(PREREG 4-2). 그래프 · 이웃 비교에는 남는다
+    masked = {k for k, v in t1_groups.items() if any(has_mask(t1_text[i]) for i in v)}
+    t1_groups = {k: v for k, v in t1_groups.items() if k not in masked}
+    print(f"- T1 가림 표시가 든 묶음 {len(masked)}개는 문항 원천에서 뺌(그래프 · 이웃 비교에는 남음)")
+    t1 = build_candidates(t1_groups, t1_ans, NearDup(t1_text), same)
+    print(f"- T1 처분 {len(t1_text):,} → 정규화 문구 묶음 {len(t1_groups):,}개(빈 문구 · 정답 없음 제외 전)")
+    _pool_report("T1", t1, len(t1_text), freq, t1_ans)
 
-    groups: dict[str, list[str]] = defaultdict(list)
-    for i, v in usable.items():
-        groups[v["case"]].append(i)
-    g5 = {i: grams(v["summary"]) for i, v in precs.items() if v["summary"]}
-    sizes, ok = [], {}
-    for case, members in groups.items():
-        mem = set(members)
-        neigh = {j for j, gj in g5.items() if j not in mem and precs[j]["case"] != case
-                 and any(jaccard(g5[m], gj) >= JACCARD for m in members)}
-        size = len(mem | {j for j, v in precs.items() if v["case"] == case}) + len(neigh)
-        sizes.append(size)
-        if size <= NEIGHBOR_MAX:
-            ok[case] = members
-    print(f"- 사건번호 묶음 {len(groups):,}개, 이웃 포함 50건 이하 {len(ok):,}개 "
-          f"(크기 분포 1: {sum(s == 1 for s in sizes)}, 2~5: {sum(2 <= s <= 5 for s in sizes)}, "
-          f"6~50: {sum(6 <= s <= 50 for s in sizes)}, 50 초과: {sum(s > 50 for s in sizes)})")
+    print(f"- T3 법원 판례 {len(precs):,} → 정답 있는 판례 {len(t3_ans):,}(판시사항 대체 {fallback}) (뺀 수 {dict(drop)})")
+    t3_groups = exact_groups({i: case_of[i] for i in precs}, case_key)
+    t3 = build_candidates(t3_groups, t3_ans, NearDup({i: t for i, t in precs.items() if t}))
+    _pool_report("T3", t3, len(precs), freq, t3_ans)
 
-    rep: Counter = Counter()
-    for members in ok.values():
-        answer = sorted({a for m in members for a in usable[m]["answer"]}, key=lambda a: (-freq[a], art_key(a)))
-        rep[answer[0]] += 1
-    fill = sum(min(n, CAP) for n in rep.values())
-    print(f"- 대표 조문 {len(rep)}종, 상위 5개 묶음 수 {[n for _, n in rep.most_common(5)]}")
-    print(f"- 대표 조문당 {CAP} 상한 후 채울 수 있는 T3 문항: **{fill}** (필요 230) → "
-          f"{'충족' if fill >= 230 else '부족: D4 잠금 전 대체 규칙(4-2) 검토'}")
-    print(f"- 최빈 조문 5개 고정 기준선(상한 없을 때 묶음 기준): {sum(n for _, n in rep.most_common(5)) / max(len(ok), 1):.1%}")
+    # 질문 텍스트 조문 표기 가림(PREREG 4-2): 가리기 전 정답 조문이 읽히는 문항 수, 가린 뒤 남은 조문 참조(0이어야 함)
+    for name, texts, answers in (("T1", t1_text, t1_ans), ("T3", precs, t3_ans)):
+        leak = left = 0
+        for i, ans in answers.items():
+            if not ans or not texts.get(i):
+                continue
+            leak += bool(set(ans) & set(r.resolve(texts[i]).article_uids))
+            left += bool(r.resolve(mask_article_refs(texts[i])).article_uids)
+        print(f"- {name} 질문 조문 표기: 정답 있는 {sum(1 for a in answers.values() if a):,}건 중 가리기 전 정답 조문이 읽힘 "
+              f"{leak:,}, 가린 뒤 남은 조문 참조 {left}")
+    refs_in_label = sum(1 for i, a in t1_ans.items() if a and has_article_ref(t1_text[i]))
+    print(f"- m2 처분 슬롯에서 빠지는 조문 표기 처분(정답 있는 처분 기준): {refs_in_label:,}")
 
 
 def report_refs(S: Path, laws: LawDict, arts: set[str]) -> None:
@@ -220,7 +235,7 @@ def main() -> None:
     report_counts(S, arts)
     report_decisions(S)
     report_dur(S)
-    report_t3(S, laws, arts)
+    report_t1_t3(S, laws, arts)
     report_refs(S, laws, arts)
 
 

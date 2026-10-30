@@ -1,5 +1,6 @@
 # 평가 문장 틀: T1(처분 → 근거 조항) · T3(판례 → 참조조문) (1주차 D4에 잠금)
-# {violation}: 위반 내용(날짜 `(YYYYMMDD)` · 차수 · 업소 식별 정보 제거). {summary}: 판결요지(없으면 판시사항).
+# {violation}: 위반 내용(`mfds.disposition.violation_text`, 앞 `(YYYYMMDD)`만 뗌). {summary}: 판결요지(없으면 판시사항).
+# 둘 다 조문 표기를 `해당 조항`으로 가린다(`eval.grouping.mask_article_refs`, PREREG 4-2). 가림 표시(`<업소명>` 등)가 든 처분은 T1 원천에서 뺀다.
 # 근거 조항 · 참조조문 필드는 질문에 넣지 않는다(정답 출처).
 t1:
   - "다음 위반 내용에 적용되는 법령 조항은 무엇인가요? 위반 내용: {violation}"
