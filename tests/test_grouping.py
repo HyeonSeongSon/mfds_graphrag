@@ -186,3 +186,67 @@ def test_masked_text_leaves_no_refs_for_resolver() -> None:
     assert any(r.resolve(t).article_uids for t in texts)
     for t in texts:
         assert not r.resolve(g.mask_article_refs(t)).article_uids, t
+
+
+def _fixture_laws():
+    from mfds.refs import LawDict
+    return LawDict.from_xml(FIX / "law_list_mfds.xml", [FIX / "lsstmd_yaksa.xml"], [FIX / "law_list_all_p1.xml"])
+
+
+def test_mask_fixes_josa_after_mask() -> None:
+    m = g.mask_article_refs
+    assert m("제5조가 정한") == "해당 조항이 정한"
+    assert m("제5조로 정한") == "해당 조항으로 정한"
+    assert m("제5조로서, 제6조로부터") == "해당 조항으로서, 해당 조항으로부터"
+    assert m("제5조와 제7조는") == "해당 조항과 해당 조항은"  # `와`는 이음말이 아니라 조사
+    assert m("제5조나 제7조라 하며, 제9조며") == "해당 조항이나 해당 조항이라 하며, 해당 조항이며"
+    # 회귀(2026-11-02 검토): 조문 가림만 했을 때 어긋나던 문장
+    assert m("법 제44조 제1항를 위반하여") == "법 해당 조항을 위반하여"
+    assert m("같은 지침 제3조는 제4조가") == "같은 지침 해당 조항은 해당 조항이"
+    # 뒤에 띄어 쓴 낱말 · 원래 받침 형태는 그대로
+    assert m("제5조 가목") == "해당 조항"
+    assert m("제5조 나머지") == "해당 조항 나머지"
+    assert m("제5조에 따라") == "해당 조항에 따라"
+
+
+def test_mask_law_names_variants() -> None:
+    names = _fixture_laws().names
+    m = lambda s: g.mask_law_names(g.mask_article_refs(s), names)  # noqa: E731
+    assert m("식품위생법 시행령 제5조 위반") == "해당 법령 해당 조항 위반"  # 한 덩어리
+    assert m("식품위생법시행령 제5조") == "해당 법령 해당 조항"  # 붙여 씀
+    assert m("식품위생법  시행규칙에 따른") == "해당 법령에 따른"  # 두 칸 공백
+    assert m("마약류관리법 위반") == "해당 법령 위반"  # 약칭
+    assert m("체외진단의료기기법 위반") == "해당 법령 위반"  # `의료기기법`으로 쪼개지지 않음
+    assert m("개정식품위생법에서") == "개정해당 법령에서"  # 붙여 쓴 앞말(refs도 이 이름을 읽음)
+    assert m("식품 등의 표시·광고에 관한 법률 위반") == "해당 법령 위반"  # 다른 가운뎃점
+    assert m("식품 등의 표시・광고에 관한 법률") == "해당 법령"
+    assert m("약사법령에 따라") == "해당 법령에 따라"  # `해당 법령령`이 되지 않음
+    assert m("약사법 시행규칙 제7조") == "해당 법령 해당 조항"  # 사전에 없는 하위 법령 이름
+    assert m("약사법시행규칙") == "해당 법령"
+    assert m("약사법을 위반") == "해당 법령을 위반"
+    assert m("식품위생법상 의무") == "해당 법령상 의무"
+    assert m("형법 제30조, 민법상") == "형법 해당 조항, 민법상"  # 타 부처 법령명은 남김
+    assert m("구 약사법(1973.3.13 법률 제2611호로 개정되기 전의 것)") == "구 해당 법령(1973.3.13 법률 제2611호로 개정되기 전의 것)"
+
+
+def test_law_masked_text_leaves_no_law_tokens_for_resolver() -> None:
+    """법령명까지 가린 문장을 `norm_text`로 정리해 refs 패턴으로 다시 읽어도 식약처 법령 토큰이 없다(생성기 확인 규칙)."""
+    from mfds.refs import Resolver, norm_text
+    laws = _fixture_laws()
+    r = Resolver(laws)
+    texts = ["약사법 제23조 제1항 및 같은 법 시행령 제3조의2에 따르면", "식품위생법 제44조(영업자 등의 준수사항) 1항 위반",
+             "식품 등의 표시·광고에 관한 법률 제8조", "식품위생법  시행령", "구 식품위생법(2010.1.1. 개정 전) 제3조",
+             "마약류관리에관한법률위반(향정)", "약사법령 및 의료기기법 시행규칙"]
+    for name in ("prec_with_ref.xml", "prec_no_ref.xml"):
+        root = etree.parse(str(FIX / name)).getroot()
+        texts.append(g.t3_text({c.tag: c.text for c in root}))
+    texts += [row["VILTCN"] for row in json.loads((FIX / "food_disposition_I0470_5rows.json").read_bytes())["I0470"]["row"]]
+
+    def law_tokens(t: str) -> list[str]:
+        return [x.group("law") for x in r.pattern.finditer(norm_text(t)) if x.group("law")]
+
+    assert any(law_tokens(t) for t in texts)
+    for t in texts:
+        masked = g.mask_law_names(g.mask_article_refs(t), laws.names)
+        assert not law_tokens(masked), (t, masked)
+        assert not r.resolve(masked).article_uids, t

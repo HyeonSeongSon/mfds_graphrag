@@ -6,6 +6,8 @@
 - 표본 조건: 묶음 + 이웃이 50건 이하. 조항별 상한: 대표 조문당 dev + test 20 이하
 - 질문 텍스트 조문 표기 가림(T1 · T3): 질문에 적힌 조문 번호로 정답을 바로 찾지 못하게 `해당 조항`으로 바꾼다.
   질문 텍스트에만 쓰고, 묶음 · 근접 중복 · 제외 목록은 원문으로 한다. 남은 참조가 없는지는 생성기가 `refs.py`로 확인한다
+- 법령명 가림(보조 입력): 조문 가림 뒤 식약처 법령명까지 `해당 법령`으로 바꾼 입력. 방식별 법령명 단서 이득을 재는 보조 행에 쓴다.
+  두 가림 모두 가림 표시 뒤 조사를 받침 형태로 맞춘다(`해당 조항가` → `해당 조항이`)
 
 순수 함수만 둔다. 파일을 쓰지 않고 업소 키를 돌려주지 않는다(`SameKey.neighbors`는 문서 ID만 낸다).
 """
@@ -15,6 +17,7 @@ import re
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 N_GRAM = 5
 JACCARD = 0.8
@@ -70,15 +73,49 @@ _REF_SEP = r"\s*(?:,|·|및|또는|내지|부터|~|∼)?\s*"
 _ARTICLE_REF = re.compile(rf"(?P<keep>{_PROMULGATION})|{_REF_START}(?:{_REF_SEP}{_REF_NEXT})*")
 
 
+LAW_MASK = "해당 법령"
+# 가림 표시는 받침(ㅇ)으로 끝나므로 바로 뒤에 붙은 받침 없는 형태의 조사를 받침 형태로 바꾼다(`제5조가` → `해당 조항이`).
+# 원문에 `해당 조항` · `해당 법령`이 원래 든 문항은 0건(2026-11-02 스냅숏 실측)이라 원문 낱말을 건드리지 않는다
+_JOSA = {"는": "은", "가": "이", "를": "을", "와": "과", "로": "으로", "나": "이나", "라": "이라", "며": "이며"}
+_JOSA_AFTER = re.compile(rf"({ARTICLE_MASK}|{LAW_MASK})({'|'.join(_JOSA)})")
+
+
+def _fix_josa(text: str) -> str:
+    return _JOSA_AFTER.sub(lambda m: m.group(1) + _JOSA[m.group(2)], text)
+
+
 def mask_article_refs(text: str) -> str:
     """T1 · T3 질문 텍스트의 조문 표기(조 · 항 · 호 · 목 · 별표 · 같은 조 등 상대 표기, 조문 바로 뒤 괄호)를
-    이어진 덩어리마다 `해당 조항` 하나로 바꾼다. 법령명과 공포번호는 남긴다."""
-    return _ARTICLE_REF.sub(lambda m: m.group("keep") or ARTICLE_MASK, text or "")
+    이어진 덩어리마다 `해당 조항` 하나로 바꾸고 뒤 조사를 맞춘다. 법령명과 공포번호는 남긴다."""
+    return _fix_josa(_ARTICLE_REF.sub(lambda m: m.group("keep") or ARTICLE_MASK, text or ""))
 
 
 def has_article_ref(text: str) -> bool:
     """조문 표기가 들어 있는가(`m2_disposition` 슬롯 제외 조건, PREREG 4-2)."""
     return mask_article_refs(text) != (text or "")
+
+
+# 법령명 가림(보조 입력, PREREG 4-2). refs는 `norm_text`(가운뎃점 변형 → `ㆍ`, 공백 하나)를 거친 뒤 이름 사이 공백을
+# 선택으로 찾으므로, 원문을 정리하지 않고 같은 범위를 잡도록 가운뎃점은 묶음으로, 이름 속 공백은 `\s*`로 받는다.
+# 앞 글자 검사는 두지 않는다(refs에도 없다. `개정식품위생법`을 건너뛰면 확인 검사가 멈춘다)
+_DOT_CLASS = "[·・•‧ㆍ]"
+# 이름 바로 뒤 `령`(`약사법령`)과 사전에 없는 하위 법령 이름(`약사법 시행규칙`)까지 한 덩어리로 가린다
+_LAW_SUFFIX = r"(?:\s*(?:시행령|시행규칙)|령)?"
+
+
+@lru_cache(maxsize=4)
+def _law_name_pattern(names: tuple[str, ...]) -> re.Pattern:
+    def one(n: str) -> str:
+        return "".join(r"\s*" if c == " " else _DOT_CLASS if c in "·・•‧ㆍ" else re.escape(c) for c in n)
+    alt = "|".join(one(n) for n in sorted(set(names), key=lambda n: (-len(n), n)))
+    return re.compile(rf"(?:{alt}){_LAW_SUFFIX}")
+
+
+def mask_law_names(text: str, names: Iterable[str]) -> str:
+    """식약처 법령명(정식 이름 · 약칭)을 긴 이름부터 `해당 법령`으로 바꾸고 뒤 조사를 맞춘다. 타 부처 법령명은 남긴다.
+    `names`는 호출자가 `refs.LawDict.names`로 넘긴다(grouping은 `mfds`를 import하지 않는다).
+    조문 가림 뒤에 쓴다: `mask_law_names(mask_article_refs(text), names)`."""
+    return _fix_josa(_law_name_pattern(tuple(sorted(names))).sub(LAW_MASK, text or ""))
 
 
 def exact_groups(texts: dict[str, str], key: Callable[[str], str]) -> dict[str, list[str]]:

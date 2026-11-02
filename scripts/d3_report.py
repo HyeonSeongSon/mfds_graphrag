@@ -7,6 +7,7 @@ T1 · T3는 D4 dry-run 전 확인이다: 묶음, 5-gram Jaccard 0.8 이웃(T1은
     python scripts/d3_report.py data/raw/20261029
 """
 
+import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -17,11 +18,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # `python scripts/
 from mfds.collect import dur  # noqa: E402
 from mfds.disposition import has_mask, read_rows  # noqa: E402
 from mfds.ingredients import normalize  # noqa: E402
-from mfds.refs import LawDict, Resolver, article_set  # noqa: E402
+from mfds.refs import LawDict, Resolver, _key, article_set, norm_text  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "eval"))
-from grouping import (CAP_PER_ARTICLE, NearDup, SameKey, build_candidates, case_key, clean_html,  # noqa: E402
-                      exact_groups, has_article_ref, mask_article_refs, normalize_violation, select, t3_text)
+from grouping import (ARTICLE_MASK, CAP_PER_ARTICLE, LAW_MASK, NearDup, SameKey, build_candidates,  # noqa: E402
+                      case_key, clean_html, exact_groups, has_article_ref, mask_article_refs, mask_law_names,
+                      normalize_violation, select, t3_text)
 
 EXPECTED = {"식약처 법령": 87, "법령 조문": 3745, "행정규칙": 513, "식품 처분(고유)": 5417}
 text = clean_html
@@ -189,6 +191,28 @@ def report_t1_t3(S: Path, laws: LawDict, arts: set[str]) -> None:
               f"{leak:,}, 가린 뒤 남은 조문 참조 {left}")
     refs_in_label = sum(1 for i, a in t1_ans.items() if a and has_article_ref(t1_text[i]))
     print(f"- m2 처분 슬롯에서 빠지는 조문 표기 처분(정답 있는 처분 기준): {refs_in_label:,}")
+
+    # 법령명 단서(PREREG 4-2): 조문 가림 뒤 `norm_text`로 정리한 문장의 refs `law` 토큰을 공백 뺀 키(`by_key`)로
+    # 법령ID에 맞춰, 정답 조문 법령과 하나라도 겹치면 "남음". T1은 문항 원천이 될 수 있는 처분(가림 표시 없음)만 센다
+    def law_ids(t: str) -> set[str]:
+        return {r.by_key[_key(x.group("law"))] for x in r.pattern.finditer(norm_text(t)) if x.group("law")}
+
+    josa = re.compile(r"해당 (?:조항|법령)[는가를와로나라며]")
+    for name, texts, answers in (("T1", t1_text, t1_ans), ("T3", precs, t3_ans)):
+        base = [i for i, a in answers.items() if a and texts.get(i) and not (name == "T1" and has_mask(texts[i]))]
+        remain = family = left = bad_josa = orig_mask = 0
+        for i in base:
+            gold = {a.split(":")[1] for a in answers[i]}
+            got = law_ids(mask_article_refs(texts[i]))
+            remain += bool(got & gold)
+            family += bool({laws.root(x) for x in got} & {laws.root(x) for x in gold})
+            masked = mask_law_names(mask_article_refs(texts[i]), laws.names)
+            left += bool(law_ids(masked))
+            bad_josa += len(josa.findall(masked))
+            orig_mask += ARTICLE_MASK in texts[i] or LAW_MASK in texts[i]
+        print(f"- {name} 법령명 단서: {len(base):,}건 중 조문 가림 뒤 정답 법령명 남음 {remain:,}({remain / len(base):.0%}), "
+              f"같은 계열까지 {family:,} / 법령명까지 가린 뒤 남은 식약처 법령명 {left}, 가림 표시 뒤 어긋난 조사 {bad_josa}, "
+              f"원문에 원래 든 가림 표시 {orig_mask}")
 
 
 def report_refs(S: Path, laws: LawDict, arts: set[str]) -> None:
