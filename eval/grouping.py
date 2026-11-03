@@ -243,10 +243,11 @@ class Selection:
 
 
 def select(cands_in_seed_order: list[Candidate], freq: Counter, n_test: int, n_dev: int,
-           cap: int = CAP_PER_ARTICLE) -> Selection:
+           cap: int = CAP_PER_ARTICLE, neighbor_max: int = NEIGHBOR_MAX) -> Selection:
     """표본 조건을 통과한 후보를 시드 순서대로 대표 조문당 cap까지 담는다. test를 먼저 채우고, dev는 남은 후보에서
-    시드 순서대로 채우되 test 문항과 충돌하는 후보는 버리고 다음 후보를 뽑는다. 상한은 dev + test 합계에 건다."""
-    pool = [c for c in cands_in_seed_order if c.ok]
+    시드 순서대로 채우되 test 문항과 충돌하는 후보는 버리고 다음 후보를 뽑는다. 상한은 dev + test 합계에 건다.
+    neighbor_max: 표본 조건(묶음 + 이웃 크기 상한). 대체 규칙(4-2)에서 `NEIGHBOR_MAX_FALLBACK`으로 한 번 올린다."""
+    pool = [c for c in cands_in_seed_order if len(c.excluded) <= neighbor_max]
     for c in pool:
         c.rep = representative(c.answer, freq)
     per: Counter = Counter()

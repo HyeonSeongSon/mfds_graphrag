@@ -10,6 +10,7 @@ sha256 · file_hashes · amendments_entries · append_amendment · prereg_status
     python eval/prereg.py lock
     python eval/prereg.py check
     python eval/prereg.py amend --kind fix --content "사유" --files mfds/refs.py
+    python eval/prereg.py amend --kind output --content "v1 생성" --files eval/evalset/v1/m4_candidates
 """
 
 import argparse
@@ -29,9 +30,11 @@ LOCK_TARGETS = [
     "eval/build_evalset.py",
     "eval/grouping.py",
     "eval/m4_candidates.py",
+    "eval/sources.py",
     "mfds/refs.py",
     "mfds/ingredients.py",
     "mfds/disposition.py",
+    "mfds/collect/dur.py",
     "schema/schema.yaml",
     "schema/intents.yaml",
     "schema/eval_cypher",
@@ -62,6 +65,11 @@ def expand(root: Path, targets: list[str]) -> list[Path]:
 
 def file_hashes(root: Path, paths: list[Path]) -> dict[str, str | None]:
     return {str(p.relative_to(root)).replace("\\", "/"): (sha256(p) if p.exists() else None) for p in paths}
+
+
+def amend_hashes(root: Path, files: list[str]) -> dict[str, str | None]:
+    """`amend --files` 값 → 기록할 해시. 디렉터리(`m4_candidates/` 등)는 `expand`로 안의 파일 전부를 펼친다."""
+    return file_hashes(root, expand(root, files))
 
 
 def amendments_entries(root: Path = ROOT) -> list[dict[str, Any]]:
@@ -156,7 +164,7 @@ def main() -> None:
     am = sub.add_parser("amend")
     am.add_argument("--kind", required=True)
     am.add_argument("--content", required=True)
-    am.add_argument("--files", nargs="*", default=[], help="수정한 잠금 대상(지금 해시를 기록)")
+    am.add_argument("--files", nargs="*", default=[], help="수정한 잠금 대상 · 산출물(지금 해시를 기록, 디렉터리는 안의 파일 전부)")
     args = ap.parse_args()
 
     if args.cmd == "lock":
@@ -168,7 +176,7 @@ def main() -> None:
         if not st["ok"]:
             raise SystemExit("기록 없는 변경이 있습니다")
     else:
-        print(json.dumps(append_amendment(args.kind, args.content, file_hashes(ROOT, [ROOT / f for f in args.files])),
+        print(json.dumps(append_amendment(args.kind, args.content, amend_hashes(ROOT, args.files)),
                          ensure_ascii=False, indent=2))
 
 

@@ -15,7 +15,7 @@ heldout_units:
   m4: [m4_citing_articles]
 heldout_cap: 110
 heldout_min: 80
-heldout_intents: null
+heldout_intents: [m3_pair_and_pregnancy, m3_pair_and_age, m4_citing_articles]
 
 intents:
   # ---- 평가용 (T2 · T4 · T6) ----

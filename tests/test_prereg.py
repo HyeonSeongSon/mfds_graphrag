@@ -61,6 +61,17 @@ def test_new_file_in_locked_dir_is_flagged(repo: Path) -> None:
     assert not prereg.prereg_status(repo)["ok"]
 
 
+def test_amend_expands_directory(repo: Path) -> None:
+    out = repo / "eval" / "evalset" / "v1" / "m4_candidates"
+    out.mkdir(parents=True)
+    for name in ("a.jsonl", "b.jsonl"):
+        (out / name).write_text(name, encoding="utf-8")
+    h = prereg.amend_hashes(repo, ["eval/evalset/v1/m4_candidates", "mfds/refs.py"])
+    assert sorted(h) == ["eval/evalset/v1/m4_candidates/a.jsonl", "eval/evalset/v1/m4_candidates/b.jsonl",
+                         "mfds/refs.py"]
+    assert all(h.values())
+
+
 def test_amendment_chain_tamper_detected(repo: Path) -> None:
     prereg.append_amendment("a", "첫째", root=repo)
     prereg.append_amendment("b", "둘째", root=repo)

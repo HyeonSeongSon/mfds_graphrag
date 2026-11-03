@@ -4,6 +4,14 @@
 # 빈 결과 쿼리는 empty_query_must_contain의 값(질문의 법령명 또는 약칭, 조문 번호)이 쿼리 안에 값으로 있어야 정답.
 # uid로 찾는 쿼리(`{uid: 'art:001783:305'}`)는 uid 문자열 안의 법령ID · 조문 번호로 같은 조건을 인정한다.
 # 쓴 법령명 · 조문 번호는 exclusion_ids.json에 넣어 학습 데이터에서 뺀다.
+# 종류별 수(n)는 PREREG CONSTANTS `REFUSAL_KINDS`와 같다. 슬롯 값은 시드 순서로 고르고, 틀은 문항마다 시드 순서로 하나.
+#   other_ministry_law: {law_name} = 타 부처 법률 이름(식약처 법령명 토큰이 든 이름은 뺌), {article_no} = 1~30, {topic} = 아래 목록
+#   missing_article: {law_name} = 식약처 법령 정식 이름(법령마다 한 번), {article_no} = 마지막 조 번호 + 5~30
+#   out_of_scope: {topic} = 아래 목록(주제 · 틀 조합마다 한 번)
+topics: [세금 신고, 부동산 임대차, 근로계약 해지, 교통사고 처리, 주택 청약, 상속 분쟁, 이혼 재산분할, 개인정보 유출,
+         저작권 침해, 병역 의무, 선거운동, 건축 허가, 해외 이민, 학교폭력, 층간소음, 전세 보증금 반환, 퇴직금 정산,
+         산업재해 보상, 자동차 정기검사, 주차 위반, 가상자산 과세, 회사 설립 등기, 특허 출원, 국민연금 수령, 실업급여,
+         항공기 운항, 농지 매매, 산림 벌채, 어업 허가, 해외 송금]
 kinds:
   other_ministry_law:
     t2c_correct: no_query_or_empty
