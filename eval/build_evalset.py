@@ -38,7 +38,7 @@ from mfds.refs import LawDict, Resolver, _key, norm_text  # noqa: E402
 
 # PREREG CONSTANTS와 같아야 한다(시작할 때 대조, 다르면 중단)
 SEED = 20261030
-SNAPSHOT = "data/raw/20261029"
+SNAPSHOT = "data/raw/20261105"
 NEIGHBOR_MAX_FALLBACK = 100
 EXCLUSION_MAX_RATIO = 0.3
 T1_T3_DEV, T1_T3_TEST, T1_T3_REQUIRED = 30, 200, 230

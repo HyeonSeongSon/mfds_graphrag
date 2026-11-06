@@ -1,7 +1,7 @@
 """관문 1-2 ~ 1-4: llama-server에서 LoRA 로드 · 요청별 강도 · --parallel 2 · flash attention + KV q8을 확인한다.
 
-서버는 미리 이렇게 띄운다(포트 8081):
-    llama-server -m <base.gguf> --lora <lora.gguf> --lora-init-without-apply -c 8192 -fa on -ctk q8_0 -ctv q8_0 -np 2 --port 8081
+서버는 미리 이렇게 띄운다(포트 8081). b11913 기본 로그 수준(3)은 flash_attn · KV 형식 줄을 찍지 않으므로 `-lv 4`가 필요하다:
+    llama-server -m <base.gguf> --lora <lora.gguf> --lora-init-without-apply -c 8192 -fa on -ctk q8_0 -ctv q8_0 -np 2 -lv 4 --port 8081
 
     python scripts/bakeoff/gate1_serve_check.py --family qwen3 --log <서버 로그 파일>
 """

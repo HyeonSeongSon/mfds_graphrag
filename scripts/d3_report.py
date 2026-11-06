@@ -4,7 +4,7 @@
 T1 · T3는 D4 dry-run 전 확인이다: 묶음, 5-gram Jaccard 0.8 이웃(T1은 같은 업소 포함), 이웃 포함 50건 이하,
 대표 조문당 20 상한. 시드 대신 고정 순서로 세고, 시드 순서 결과는 D4 dry-run에서 낸다.
 
-    python scripts/d3_report.py data/raw/20261029
+    python scripts/d3_report.py data/raw/20261105
 """
 
 import re

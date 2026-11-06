@@ -22,8 +22,8 @@ from mfds.disposition import PII, SERVICE, read_rows  # noqa: F401  (기존 이�
 
 PAGE = 1000
 FOOD_API = "http://openapi.foodsafetykorea.go.kr/api"
-MANUAL = RAW / "20261028" / "foodsafety" / f"{SERVICE}.csv.gz"
-MANUAL_NOTE = "사용자 수동 수집, 2026-10-28"
+MANUAL = RAW / "manual" / "foodsafety" / f"{SERVICE}.csv.gz"
+MANUAL_NOTE = "사용자 수동 수집, 2026-11-05"
 
 
 def check_json(content: bytes) -> None:

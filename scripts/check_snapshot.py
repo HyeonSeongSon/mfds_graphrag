@@ -1,6 +1,6 @@
 """수집 스냅숏 검수: manifest · 파일 · 해시 · ID · 완결성 · 내용 이상치 · 키 · 업소 정보. 집계만 출력한다.
 
-    python scripts/check_snapshot.py data/raw/20261029
+    python scripts/check_snapshot.py data/raw/20261105
 """
 
 import hashlib
@@ -161,7 +161,7 @@ def main() -> None:
               f"({sum(map(len, multi.values()))}건)")
     rows_ = read_rows(S)
     dates = sorted(r["DSPS_DCSNDT"] for r in rows_ if r.get("DSPS_DCSNDT"))
-    check(len(rows_) == len({r["DSPSDTLS_SEQ"] for r in rows_}) == 5417, f"식품 처분 {len(rows_):,}행 · ID 고유")
+    check(len(rows_) == len({r["DSPSDTLS_SEQ"] for r in rows_}) == 5319, f"식품 처분 {len(rows_):,}행 · ID 고유")
     print(f"- 참고: 처분 확정일 {dates[0]} ~ {dates[-1]}, 빈 근거 조항 {sum(not r['LAWORD_CD_NM'].strip() for r in rows_)}, "
           f"빈 위반 내용 {sum(not r['VILTCN'].strip() for r in rows_)}")
 

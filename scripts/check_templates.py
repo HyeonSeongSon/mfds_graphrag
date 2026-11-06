@@ -1,6 +1,6 @@
 """1주차 D4 템플릿 대조: 전체 그래프(`--mode full`)에서 정답 Cypher 템플릿을 생성기가 고른 슬롯마다 돌려 원자료 정답과 비교한다.
 
-잠그지 않는 확인 도구다. 먼저 `python -m mfds.load --snapshot data/raw/20261029 --mode full --wipe`로 적재하고,
+잠그지 않는 확인 도구다. 먼저 `python -m mfds.load --snapshot data/raw/20261105 --mode full --wipe`로 적재하고,
 `python eval/build_evalset.py --dry-run --compare-out <scratchpad>/compare.json`으로 대조 파일을 만든다.
 
 - 11개 템플릿이 오류 없이 실행되는지, 없는 성분 uid에서 T2 템플릿이 null을 내는지

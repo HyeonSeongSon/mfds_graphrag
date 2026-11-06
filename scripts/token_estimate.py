@@ -4,7 +4,7 @@
 해석례는 질의요지 · 회답 · 이유, 심판은 주문 · 청구취지 · 이유 앞부분(앞 6천 자로 잡음). 비교용으로 전문도 센다.
 토크나이저(`tokenizers` + tokenizer.json)가 있으면 그 토큰 수도 센다(벤더 토크나이저 대용, 참고치).
 
-    python scripts/token_estimate.py data/raw/20261029 [tokenizer.json]
+    python scripts/token_estimate.py data/raw/20261105 [tokenizer.json]
 """
 
 import re

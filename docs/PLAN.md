@@ -4,6 +4,106 @@
 
 `wiki/projects/local-graphrag-mfds-weekly-plan-20261023.md`의 8주 플랜을 사용자 요청(2026-10-26)으로 **4주로 압축**한다. 부록(1주차 상세)은 1주차 D4에 잠그는 PREREG의 원본이라 이 4주 일정 기준으로 함께 확정한다. 전제: 주 5일 전업, 사람 작업은 낮에 하고 GPU · API 배치는 밤에 돌린다. 이 문서에서 "사람 검수"는 사용자가 하는 작업이다.
 
+## 재기준 일정 (2026-11-05, 포맷 복구)
+
+**경위:** 1주차 D4 PREREG 잠금 직전에 PC를 포맷해 git 밖의 것이 모두 사라졌다.
+- 사라진 것: 스냅숏 `data/raw/20261029`(manifest만 남음), 10-28 수동 수집 식품 처분 CSV, conda env 두 개, `tools/llama.cpp/b11913`, 모델 · HF 캐시, Neo4j 볼륨, `.env`
+- 사용자 결정(2026-11-05): 백업이 없으므로 전부 다시 받는다. 11-05 ~ 11-06에 복구하고 **11-09(월)부터 4주, 12-04(금) 마감**으로 한다. 범위 · 핵심 성과는 그대로 두고 디스크 제약만 푼다(C: 여유 270GB).
+- 아래 일자별 절(1주차 D1 ~ 4주차 D5, 부록)은 작업 내용의 기준으로 그대로 둔다. 이 절은 날짜 배치 · 복구 절차 · 바뀐 위험만 정한다. PREREG는 잠그기 전이므로 새 스냅숏으로 바꿔도 사전 등록 위반이 아니다.
+
+### 복구 (11-05 목 ~ 11-06 금)
+
+**스냅숏 이름:** `SNAP` = `data/raw/<수집 시작일>`(예정 `data/raw/20261106`)로 한 번 정하고, 모든 수집기에 같은 `--snapshot`을 넘긴다. `snapshot_dir()`(`mfds/collect/common.py`)는 인자가 없으면 그날 날짜로 폴더를 만들기 때문에, 수집기마다 다른 날 돌리거나 자정을 넘기면 폴더가 갈라진다.
+
+| 순서 | 작업 | 확인 |
+|---|---|---|
+| 1 | (사용자) `.env` 복구(`LAW_OC` 확인, `NEO4J_PASSWORD` 새로 정함, 키는 비밀번호 관리자에도 따로 둠). 식품안전나라 I0470 CSV를 다시 내려받아 `data/raw/manual/foodsafety/I0470.csv.gz`에 둔다(아래 "식품 처분 CSV") | `.env`, CSV 행 수 · 고유 `DSPSDTLS_SEQ` 수를 따로 세어 기록 |
+| 2 | Miniconda → `mfds-graphrag`(3.12, `requirements.txt`) → `pytest` | 실패 0, Neo4j 테스트는 건너뜀 |
+| 3 | Docker Desktop → `docker compose up -d` → `cypher-shell "RETURN 1"`, `docker run --gpus all … nvidia-smi` → `pytest` | 빈 DB라 **190 통과 · 0 건너뜀** |
+| 4 | 전량 수집(약 2시간), 아래 명령을 **한 번에 하나씩** | manifest 행 수(이전 4,085), 경로 중복 0, `.part` 0 |
+| 5 | 수집 중 학습 env · llama.cpp 재구성(아래 "학습 환경") | D1 점검 3종 재현, `requirements-train.txt` · `env-train.yml` |
+| 6 | 1차 검사: `scripts/check_snapshot.py` · `scripts/d3_report.py`. 89행(체계도 없는 법령 `{"011801"}`) · 164행(처분 `== 5417`) 고정값은 실패할 수 있다 | 실패 항목과 실제 값 |
+| 7 | 경로 · 고정값 갱신(아래 "고칠 곳") → `check_snapshot.py` 재실행 → 10-29 대비 차이 표 | 문제 0건, `grep -rn --exclude-dir=.git "2026102[89]"`이 "남겨 둘 기록"에만 나옴 |
+| 8 | `python -m mfds.load --snapshot <SNAP> --mode full --wipe` → 원자료 읽기 대조(`scripts/check_sources.py`, 새로 만듦) → `build_evalset.py --dry-run` → `scripts/check_templates.py` → `pytest` | 대조 불일치 0, 배분표 일치, 템플릿 대조 불일치 0, T1 · T3 채울 수 있는 문항 230 이상, `pytest` 189 통과 · 1 건너뜀 |
+| 9 | PREREG 수치 갱신(아래 "PREREG에서 다시 잴 수치") | 사용자 검토용 수치 목록 |
+
+**수집 명령**(PowerShell 7 · cmd · Git Bash. Windows PowerShell 5.1에서는 `&&`가 문법 오류이므로 한 줄씩 실행한다):
+
+```
+python -m mfds.collect.law --snapshot data/raw/20261106 && python -m mfds.collect.admrul --snapshot data/raw/20261106 && python -m mfds.collect.decisions --snapshot data/raw/20261106 && python -m mfds.collect.foodsafety --snapshot data/raw/20261106 --source data/raw/manual/foodsafety/I0470.csv.gz
+```
+
+- 동시에 돌리지 않는다. `Collector`는 시작할 때 manifest를 한 번 읽고 그 뒤로는 덧붙이기만 한다. 초당 1회 제한도 프로세스마다 따로 걸린다. `decisions`도 `law/list_mfds`를 받으므로 `law`와 같이 돌리면 파일 · manifest 행이 중복된다.
+- `FOODSAFETY_KEY`가 있으면 `--source`는 무시되고 API로 받는다.
+
+**식품 처분 CSV**
+- 범위: 받은 날 공개 중인 처분 전체. 공개 기간(약 2년)이 지난 처분은 사이트에서 내려가므로(`docs/d1-checks.md`), 10-28 원본(확정일 2024-10-28 ~ 2026-10-28)의 앞쪽 약 1주일 치가 빠지는 것이 정상이다. `PUBLIC_DT`가 공개 종료일로 보인다(고정 자료에서 2024-10-28 확정 처분이 2026-10-27, 확인 안 됨). 새 CSV에서 이 관계를 확인한다.
+- 형식: UTF-8 BOM CSV를 gzip으로 묶은 `I0470.csv.gz`(`read_rows`가 `gzip.open` + `utf-8-sig`로 읽음). 평문이면 묶고, CP949면 UTF-8 BOM으로 바꾼 뒤 묶는다.
+- 열 이름 17개가 원본과 같아야 한다. 고정 자료 12열(`LAST_UPDT_DTM` · `DSPS_INSTTCD_NM` · `LAWORD_CD_NM` · `DSPSDTLS_SEQ` · `VILTCN` · `PUBLIC_DT` · `INDUTY_CD_NM` · `DSPS_DCSNDT` · `DSPS_BGNDT` · `DSPS_TYPECD_NM` · `DSPS_ENDDT` · `DSPSCN`)에 `mfds/disposition.py` `PII` 5열(`PRCSCITYPOINT_BSSHNM` · `ADDR` · `TELNO` · `PRSDNT_NM` · `LCNS_NO`)을 더한 것이다. 업소 정보 제거가 열 이름 기준이라, 한글 머리글이면 API 필드명으로 바꾼다(행 수 유지 확인).
+- 원본은 스냅숏 밖(`data/raw/manual/`, git 제외)에 두어 복사본과 다른 파일이 되게 한다.
+
+**학습 환경:** torch 2.14.1+cu126 · Unsloth 2026.10.9 · transformers 5.17.0 · trl 1.15.0 · Triton 3.8.0(`docs/d1-checks.md`). 딸린 패키지 버전 · torch 설치 명령 · 파이썬 버전은 기록이 없어 완전히 같은 env라고 장담할 수 없다. `conda create -n mfds-train python=3.12`로 시작하고, 다 만든 뒤 `pip list --format=freeze > requirements-train.txt`(`pip freeze`는 conda 패키지를 `file:///` 줄로 냄), `conda env export --no-builds > env-train.yml`(마지막 `prefix:` 줄은 지움), torch 설치 명령을 저장소에 남긴다. llama.cpp는 b11913(7aca0d2ea) CUDA 12.4 빌드와 같은 커밋 소스.
+
+**고칠 곳(7단계):**
+- `eval/build_evalset.py` `SNAPSHOT`, `eval/PREREG.md` CONSTANTS와 본문 스냅숏 경로
+- `mfds/collect/foodsafety.py` `MANUAL`(→ `data/raw/manual/foodsafety/I0470.csv.gz`) · `MANUAL_NOTE`(→ 내려받은 날), `docs/data-sources.md`의 "키가 없을 때(현재)" 줄
+- 스크립트 docstring 사용 예(`check_snapshot.py` · `d3_report.py` · `token_estimate.py` · `check_templates.py`)
+- `scripts/check_snapshot.py` 89행(실패했을 때만, 법령을 확인하고 사유 기록) · 164행(1단계에서 따로 센 고유 처분 수로)
+- `mfds/disposition.py`의 처분 14건 주석
+- 고치지 않음: `scripts/d3_report.py` `EXPECTED`(10-23 실측, "일치 / 차이"만 출력)
+- 남겨 둘 기록: `docs/week1-notes.md` · `api-cost.md` · `d1-checks.md` · `data-sources.md`의 10-29 수집 결과, 이 문서, `data/raw/20261029/manifest.tsv`, `tests/fixtures/`
+
+**차이 표:** 파싱한 건수 대조가 주 기준이다(법령 · 조문 · 항 · 호 · 고시 · DUR 별표 행 · 판례 · 해석례 · 심판 · 처분). manifest sha256 차이는 참고용이다(응답에 조회 시각 같은 값이 있으면 내용이 같아도 해시가 다를 수 있음, 해시만 다른 파일 몇 개는 본문 비교). 식품 처분은 확정일 분포로 센다. 빠진 수 추정은 5,417 − (새 전체 − 2026-10-29 이후 확정분)이다. 원본이 없어 ID 대조가 불가능하고, 나중에 고쳐진 처분이 섞이므로(`LAST_UPDT_DTM`이 10-28 이후인 행 수를 함께 셈) 추정치라고 적는다. 법령 87개 · 법률 26개는 수가 바뀌었는지만 본다.
+
+**PREREG에서 다시 잴 수치(9단계):** D4 `TBD` 14곳과 "D4 dry-run 결과"(이전 T1 276 · T3 354 · 532 슬롯 · 노드 47,594 · 엣지 75,576과 나란히), `M3_SET_UNIT`(염 형태 0.3% 근거 → 새 수치로 다시 판단), 원자료 읽기 대조 결과, 업소 정보 든 처분 14건, 246/445 · 118/5,310, 357/445 · 233/5,296, 289건, 308/5,417 · 698/972, 법령 87 · 법률 26(바뀐 경우만). 이전 값은 "10-29 스냅숏"처럼 경로 문자열 없이 적는다(grep 확인이 옛 경로를 잡도록).
+
+**막히면:** 11-06에 dry-run이 안 끝나면 11-09 오전에 마저 하고 잠금을 오후로 미룬다. 제외 비율이 `EXCLUSION_MAX_RATIO`를 넘으면 사전 등록한 대체 규칙을 적용한다.
+
+### 새 4주 일정 (11-09 ~ 12-04)
+
+괄호 안은 아래 "주차별 계획"의 원래 일자다. 세부 작업 · 산출물 · 완료 확인은 그 절을 따른다.
+
+| 날짜 | 원 일자 | 작업 |
+|---|---|---|
+| 11-09 월 | W1D4 5~6 | (사용자) PREREG 검토 약 1시간 → 잠금 → 밤: v1 생성 · 해시 4종 → **백업 1** |
+| 11-10 화 | W1D5 | 평가용 그래프 적재 · 누수 검사 · dump/복원, (사용자) 라벨 검수 50+50 → push, 밤: 임베딩 |
+| 11-11 수 | W2D1 | (사용자) 인용 파싱 표본 100 → push, API 비용 측정 → 배치 제출, 채점 도구 |
+| 11-12 목 | W2D2 | (사용자) M4 정답 검수 → push, 추출 결과 적재 → **백업 2**, 4B · 8B 다운로드, 기준 4B Q4 |
+| 11-13 금 | 여유 | 밀린 일, 조건부 작업(T4 분기 검증, 라벨 재검수) |
+| 11-16 월 | W2D3 | 파이프라인 · 기준선 few-shot · dev 시간 실측 |
+| 11-17 화 | W2D4 | dev 분석 · 데모, 저녁 동결 → **백업 3** → 밤: Text2Cypher test 4B · 8B |
+| 11-18 수 | W2D5 | 파이프라인 동결 → test 기준선(목요일 오전까지) |
+| 11-19 목 | W3D1 | 오전 핵심 성과 2 동결 → **백업 4**, 학습용 의도 템플릿 · 바꿔 쓰기(8B 보관) |
+| 11-20 금 | W3D2 | 슬롯 보존 · 근접 중복 제거, (사용자) 표본 100 → push, 데이터 카드 |
+| 11-23 월 | W3D3 | QLoRA (a) · (b) · (c), CPU로 Q8 · Q5 · Q3 |
+| 11-24 화 | W3D4 | 어댑터 B dev → test · 채택 판정 · imatrix Q4, 밤: 양자화 dev 선별 |
+| 11-25 수 | W3D5 | 병합 Q4 · test · 비열등성 → 핵심 성과 1 · 양자화 표 → **백업 5** |
+| 11-26 목 | W4D1 | 서빙 · 요청별 어댑터 · 동시 1 · 2 측정 |
+| 11-27 금 | 여유 | 3주차 GPU 작업이 넘치면 11-26에 이어 돌리고 W4D1을 이날로 민다 |
+| 11-30 월 | W4D2 | 오프라인 번들 · 네트워크 차단 기동 · 외부 연결 0건 |
+| 12-01 화 | W4D3 | 최종 로컬 실행 + 같은 서브그래프로 API → 핵심 성과 3, 밤: 시연용 그래프 재적재 |
+| 12-02 수 | W4D4 | README · 구조도 · 데모 영상 |
+| 12-03 목 | W4D5 | 덱 4쪽 · 한계 · 면접 질문 · vault |
+| 12-04 금 | 여유 | 마감 |
+
+남은 작업 약 16.5일 + 여유 3일. 사람 검수 총량(약 10.5시간 + 조건부)은 그대로다.
+
+**판단 시점(새 날짜):** PREREG 미잠금 11-10(W1D5), 기준선 표 없음 11-18(W2D5), 첫 학습 4시간 초과 11-23(W3D3). 자르는 순서 · 자르지 않는 것은 아래와 같고, 디스크 사유 항목은 없앤다.
+
+**디스크 제약 해제(11-05):** 8B GGUF · fp16 GGUF · 비후보 양자화본 · 원본 safetensors를 끝까지 보관한다. 아래 "디스크 예산"의 삭제 순서와 "여유 12GB 미만이면 자름" 규칙은 적용하지 않는다.
+
+**백업(재발 방지):** git 밖(외장 디스크나 클라우드)에 복사하고 sha256을 대조한다. 각 백업에는 그 시점까지 새로 생긴 것만 더한다.
+
+| 백업 | 시점 | 대상 | 다시 만드는 비용 |
+|---|---|---|---|
+| 1 | 11-09 밤, 잠금 직후 | 스냅숏, `data/raw/manual/`, 평가셋 v1 · 제외 목록 · M4 후보 | 수집 약 2시간 + 수치 재검토 |
+| 2 | 11-12, 추출 적재 후 | API 추출 결과, 임베딩 캐시 `data/cache/` | API 비용, 밤 하나 |
+| 3 | 11-17 밤, 동결 직후 | Neo4j dump, 정답 Cypher 결과 해시, 기준 4B Q4 파일 자체(해시 잠김), 모델 해시 목록 | 같은 파일이 필요 |
+| 4 | 11-19, 핵심 성과 2 동결 후 | test 기준선 결과 · 문항별 서브그래프 파일 | GPU 약 15시간 |
+| 5 | 11-25, 핵심 성과 1 후 | LoRA 어댑터(safetensors · GGUF), 양자화본, 판정 · 양자화 표 결과 | 학습 7~14시간 |
+
+사람 검수 파일은 검수가 끝날 때마다 커밋 · push한다. `.env`는 백업하지 않고 키를 비밀번호 관리자에 둔다.
+
 ## 범위: 8주 → 4주
 
 | | 유지 | 제외(스트레치 또는 설계만) |
@@ -75,12 +175,13 @@
 | 학습 환경 | 1주차 D1 | WSL2로 확정, 디스크 비용 반영 |
 | GPU 컨테이너 | 1주차 D1 | 4주차에 llama.cpp는 호스트에서 직접 실행하고 방화벽으로 외부 차단 |
 | 벤더 약관 | 1주차 D1 | 바꿔 쓰기를 오픈 가중치 모델 · 템플릿만으로 대체 |
-| 디스크 여유 60GB(WSL2면 75GB) | 1주차 D1 (사용자) | 3주차 D5 전 여유 12GB 미만이면 도메인 imatrix · 병합 비교를 자름 |
+| 디스크 여유 60GB(WSL2면 75GB) | 1주차 D1 (사용자) | 3주차 D5 전 여유 12GB 미만이면 도메인 imatrix · 병합 비교를 자름. **11-05 해제(포맷 후 여유 270GB)** |
+| 로컬 손실(포맷 · 디스크 고장) | 재기준 일정의 백업 1~5 | git 밖 백업에서 복원. 없으면 해당 단계를 다시 실행(2026-11-05 포맷 때 스냅숏 · env · 모델 손실) |
 | 평가용 그래프 동결 | 2주차 D4 저녁 | 동결 뒤 그래프가 바뀌면 8B를 다시 받아 베이스 4B · 8B Text2Cypher와 답변 기준선을 다시 돌린다 |
 | 4B Cypher 성능 | 2주차 D4 | 템플릿 경로 비중 확대, 어댑터 개선폭을 성과로 |
 | VRAM(8B, 4B Q8) | 2주차 D3 실측 | 8B와 Q8 기준점은 일부 층을 CPU로 내림(품질 동일, 속도만 느림). 운영점은 전 층 GPU 적재가 조건(4-5) |
 
-**디스크 예산:**
+**디스크 예산:** (2026-11-05 해제. 여유 270GB라 아래 삭제 순서는 적용하지 않고 모두 보관한다. 원래 계산은 기록으로 남긴다)
 - 상시: Neo4j · 원자료 3GB, conda · torch 약 6GB, Docker 이미지 약 4GB, 4B 원본 safetensors 8GB, Unsloth 4bit 베이스 · HF 캐시 약 5GB, 8B 기성 Q4_K_M 5GB(**3주차 D1에 삭제**)
 - 2주차 D2: fp16 GGUF 8GB(3주차 D4까지 보관) + 기준 Q4 2.5GB → 약 42GB
 - 3주차 D3~D4: Q8 · Q5 · Q3 · imatrix Q4 약 12GB → **최대 약 48GB(3주차 D4, 여유 약 12GB)** → fp16 GGUF 삭제, dev 선별 뒤 비후보 삭제 → D5 직전 약 38GB
@@ -795,4 +896,11 @@ Streamlit 한 페이지: 질문 → 답변 · 인용 근거(클릭하면 원문)
 - `eval/build_evalset.py`: dry-run 결과 T1 276 · T3 354, 대체 규칙 없음, 제외 처분 10.1% · 판례 16.9%, 확인 규칙(조문 · 법령명 토큰) 0건 중단. 전체 적재 그래프에서 532 슬롯 문항 단위 대조 불일치 0, 숨은 조건 판 불일치 0(uid 집합 비교), M3 evidence 불일치 0(`scripts/check_templates.py`). held-out = m3 + m4(80)
 - 외부 검토 반영: 파일 생성은 `--heldout check` · 잠금 기록 · `prereg_status` ok일 때만(`check_locked`), 데이터 카드에 로컬 절대경로 대신 스냅숏 상대경로, 같은 split 안 이어진 문항 쌍(T1 test 1) 보고
 - PREREG에 정한 값: `REFUSAL_KINDS`(dev 7 · 7 · 6, test 50 · 50 · 50), `T2_DEV_POS` 22, 거절 주제 30개(`refusal.yaml`), M4 모집단(법률 현행 조문) · dev · dev 예비 · v1 정답 비움, m2_case 라벨 유일 조건, heldout_law 계열 정의, 층 기준 "대표 조문". `prereg.py amend --files`가 디렉터리를 펼친다
+
+**20차: 포맷 복구 · 일정 재기준 (2026-11-05, D4 잠금 전)**
+- PC 포맷으로 git 밖의 스냅숏 · 식품 처분 원본 · env · llama.cpp · 모델 · Neo4j 볼륨이 사라졌다. 백업이 없어 전부 다시 받는다(사용자 결정)
+- 일정: 11-05 ~ 06 복구, 11-09 ~ 12-04 4주(여유일 11-13 · 11-27 · 12-04). 범위 · 핵심 성과는 그대로다. 맨 위 "재기준 일정" 절이 날짜 기준이고, 일자별 절은 작업 내용 기준으로 그대로 둔다
+- 새 스냅숏으로 dry-run과 PREREG 본문 수치를 다시 재고 `M3_SET_UNIT`을 다시 판단한다(잠금 전이라 사전 등록 위반 아님). 식품 처분은 공개 기간이 지나 앞쪽 약 1주일 치가 빠지는 것이 정상이며, 빠진 수는 추정치로 보고한다
+- 디스크 제약 해제(여유 270GB), 백업 1~5 시점 추가, 학습 env 재현 기록(`requirements-train.txt` · `env-train.yml`) 추가
+- 재기준안은 외부 검토 4회(같은 날)를 거쳤다. pytest 기준을 단계별로 나눴고, 수집기를 한 번에 하나씩 같은 `--snapshot`으로 돌리게 했다. 처분 CSV 형식 · 열 이름 조건, 고정값 검사 순서(1차 검사 → 고침 → 재검사), 백업 공백도 이때 고쳤다
 
