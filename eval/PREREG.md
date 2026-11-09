@@ -1,6 +1,6 @@
 # 사전 등록: mfds-graphrag 평가셋 · 지표 · 채택 기준
 
-이 파일은 `eval/prereg.py lock`이 sha256으로 잠급니다(1주차 D4). 잠근 뒤의 기록은 `eval/AMENDMENTS.md`에만 추가합니다(추가만 가능, 각 항목은 이전 항목의 해시를 담음). 원본은 `docs/PLAN.md` 부록 4-1~4-7입니다. 수집 범위와 실측은 `docs/data-sources.md` · `docs/week1-notes.md`에 있습니다.
+이 파일은 `eval/prereg.py lock`이 sha256으로 잠급니다(1주차 D4). **해시 규칙(잠금 · AMENDMENTS 공통, `eval/prereg.py`의 `sha256`):** 텍스트 파일(확장자 md · py · yaml · yml · json · jsonl · cypher · txt · tsv · csv)은 CRLF를 LF로 바꾼 뒤 sha256을 재고, 그 밖의 파일(모델 GGUF · 덤프 등)은 바이트 그대로 잽니다. Windows 작업 사본(`core.autocrlf=true`, CRLF)에 `sha256sum`을 그대로 돌리면 텍스트 파일은 기록과 다르게 나옵니다. 잠근 뒤의 기록은 `eval/AMENDMENTS.md`에만 추가합니다(추가만 가능, 각 항목은 이전 항목의 해시를 담음). 원본은 `docs/PLAN.md` 부록 4-1~4-7입니다. 수집 범위와 실측은 `docs/data-sources.md` · `docs/week1-notes.md`에 있습니다.
 
 **상태: 초안(2026-10-30, D4 dry-run 수치 채움 2026-11-03, PC 포맷 뒤 새 스냅숏 20261105로 수치 갱신 2026-11-05).** `TBD(D4 dry-run …)` 자리는 D4 dry-run · 사용자 검토 뒤 채우고, 이 자리가 남아 있으면 잠그지 않습니다. `TBD(2주차 D2 …)` 자리(모델 파일 해시 · llama.cpp 빌드)는 잠근 뒤 AMENDMENTS에 기록합니다.
 

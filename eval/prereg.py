@@ -47,8 +47,21 @@ PLACEHOLDER = "(잠금 전에 채웁니다)"
 AMENDMENTS_HEADER = "# AMENDMENTS — 잠금 뒤 기록 (추가만 가능, 각 항목은 이전 항목의 sha256 을 담는다)\n\n"
 
 
+# 줄 끝을 LF로 맞춰 해시하는 텍스트 확장자. 그 밖(GGUF · safetensors · dump 등)은 바이트 그대로(표준 sha256sum과 같음)
+TEXT_SUFFIXES = {".md", ".py", ".yaml", ".yml", ".json", ".jsonl", ".cypher", ".txt", ".tsv", ".csv"}
+
+
 def sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    """텍스트 파일(`TEXT_SUFFIXES`)은 줄 끝을 LF로 맞춘 내용의 sha256, 나머지는 바이트 그대로의 sha256.
+
+    Git for Windows 기본 `core.autocrlf=true`에서는 작업 사본이 CRLF, 저장소가 LF라서, 바이트 그대로 해시하면
+    다른 PC · WSL에서 클론하거나 LF로 쓴 산출물을 다시 체크아웃할 때 내용이 같아도 해시가 달라진다(2026-11-09).
+    생성기가 출력하는 산출물 해시(LF로 씀)와는 같은 값이다. 텍스트 파일을 밖에서 확인할 때는 CRLF를 LF로 바꾼 뒤 잰다.
+    모델 파일 · 덤프 같은 바이너리는 바꾸면 내용이 달라지므로 그대로 잰다."""
+    data = path.read_bytes()
+    if path.suffix.lower() in TEXT_SUFFIXES:
+        data = data.replace(b"\r\n", b"\n")
+    return hashlib.sha256(data).hexdigest()
 
 
 def expand(root: Path, targets: list[str]) -> list[Path]:

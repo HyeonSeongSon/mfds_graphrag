@@ -313,7 +313,7 @@ PC 포맷으로 git 밖 자료(스냅숏 원자료 · 10-28 식품 처분 원본
 | Miniconda · `mfds-graphrag` | Miniconda 26.9.4, Python 3.12.16, `requirements.txt` 그대로. Neo4j 없이 `pytest` 실패 0 |
 | Neo4j · GPU 컨테이너 | `neo4j:5.26.32-community` + APOC 5.26.32 `RETURN 1` 성공, `nvidia/cuda:12.6.3-base-ubuntu24.04`에서 RTX 2060 6144MiB · 드라이버 610.88(D1과 같음). 빈 DB `pytest` 190 통과 · 0 건너뜀. Docker Desktop 경로는 `%LOCALAPPDATA%\Programs\DockerDesktop` |
 | `mfds-train` | Python 3.12.16. 주요 5개 버전 D1과 같음(torch 2.14.1+cu126 · Unsloth 2026.10.9 · transformers 5.17.0 · trl 1.15.0 · Triton 3.8.0). 기록에 없던 것: Triton은 `triton-windows==3.8.0.post29`(3.8.0 중 최신 post), `unsloth_zoo`는 처음 2026.11.2가 깔려 D1 날(10-27) 받을 수 있던 짝 **2026.10.9로 고정**. 나머지 딸린 패키지는 11-05 최신이라 10월 env와 완전히 같다고 장담할 수 없다. 기록: `requirements-train.txt`(맨 위에 torch cu126 설치 명령) · `env-train.yml`(`prefix:` 줄 삭제) |
-| llama.cpp | 공식 릴리스 b11913 `llama-b11913-bin-win-cuda-12.4-x64.zip` + `cudart-…-12.4-x64.zip`, 태그 커밋 7aca0d2ea 확인, `--version` build 11913. 소스는 같은 커밋 zip을 `tools/llama.cpp/src-b11913`에. 받은 zip은 `tools/llama.cpp/dl/`에 둠(백업 대조용) |
+| llama.cpp | 공식 릴리스 b11913 `llama-b11913-bin-win-cuda-12.4-x64.zip` + `cudart-…-12.4-x64.zip`, 태그 커밋 7aca0d2ea 확인, `--version` build 11913. 소스는 같은 커밋 zip을 `tools/llama.cpp/src-b11913`에 풀고 zip은 지웠다. `tools/llama.cpp/dl/`에는 빌드 zip 2개만 둠(백업 대조용 sha256: `llama-b11913-bin-win-cuda-12.4-x64.zip` `a63d06a2afc8a73f580e6088b90f965f2bd0419a6f986d3ef48fc0755dce69d6`, `cudart-llama-bin-win-cuda-12.4-x64.zip` `8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6`) |
 | D1 점검 재현 | Qwen3-0.6B fp16 QLoRA 30스텝 22초 · loss 4.26 → 0.11 · VRAM 최대 711MiB. LoRA GGUF 변환 · 로드, 요청별 강도(0 / 1), `-np 2` 서로 다른 설정, flash attention enabled · K · V q8_0 · 29/29층 GPU · 슬롯당 4096 모두 통과 |
 
 - **`gate1_serve_check.py`는 서버를 `-lv 4`로 띄워야 한다.** b11913 기본 로그 수준(3)은 `flash_attn` · KV 형식 줄을 찍지 않아 마지막 두 판정이 거짓 실패로 나온다. docstring 명령에 `-lv 4`를 넣었다
@@ -344,11 +344,11 @@ PC 포맷으로 git 밖 자료(스냅숏 원자료 · 10-28 식품 처분 원본
 | 해석례 검색 합 · 본문 | 395 · 276 | **399 · 278** | 새 해석례 344171 · 344175 |
 | 식품 처분(고유) | 5,417 | **5,319** | 아래 |
 | M3 염 형태 | 3개(0.3%) | 3개(0.3%) | `M3_SET_UNIT` uid 그대로 |
-| T1 채울 수 있는 문항 · 제외 비율 | 276 · 10.0% | **261** · 9.9% | 필요 230 충족. 문구 묶음 908 → 895 |
-| T3 채울 수 있는 문항 · 제외 비율 | 354 | 354 · 16.7% | 정답 있는 판례 445 그대로 |
+| T1 채울 수 있는 문항 · 제외 비율(`d3_report` 추정) | 276 · 10.0% | **261** · 9.9% | 필요 230 충족. 문구 묶음 908 → 895. 제외 비율은 `d3_report.py`의 고정 순서 추정치(541 → 527건)이고, dry-run 실제 값은 10.1% → 10.6%(549 → 564건, PREREG "D4 dry-run 결과" · 아래 8단계 표) |
+| T3 채울 수 있는 문항 · 제외 비율(`d3_report` 추정) | 354 | 354 · 16.7% | 정답 있는 판례 445 그대로. dry-run 실제 제외는 237건(16.9%)으로 같음 |
 
 - **식품 처분(추정치):** 새 범위는 처분 확정일 2024-11-05 ~ 2026-11-04. 10-29 이후 확정분 56건, 10-28 이전 확정분 5,263건 → 공개 기간이 지나 빠진 처분 ≈ 5,417 − 5,263 = **약 154건**(2024-10-28 ~ 11-04 확정분). 10-28 원본이 없어 ID 대조는 못 했고, `LAST_UPDT_DTM`이 10-29 이후인 행이 80건이라 그사이 고쳐지거나 철회된 처분이 섞인다
-- **`PUBLIC_DT`:** 확정일 + 729일인 행이 4,972건 → 공개 종료일(공개 기간 약 2년)로 확인
+- **`PUBLIC_DT`:** 확정일 + 729일인 행이 4,972건 → 공개 종료일(공개 기간 약 2년)로 확인. 나머지 347건은 `PUBLIC_DT`가 2026-11-04 ~ 2032-10-03으로 흩어져 있고, 그중 15건은 내려받은 날(11-05)보다 앞인데도 공개 중이었다(11-09 재확인)
 - **업소 정보가 텍스트에 든 처분:** 14건 → **17건**(위반 내용 17: 업소명 14 · 인허가번호 4, 그중 1건은 처분 내용에도)
 - **PREREG 본문 수치(9단계에서 반영):** T1 조문 표기 118/5,310 → 120/5,214, T1 법령명 단서 233/5,296 → 224/5,198, m2 처분 슬롯 289 → 280, T3 246/445 · 357/445 그대로
 - **manifest sha256(참고):** 두 manifest에 모두 있는 파일 4,084개 중 해시가 다른 것 136개.
@@ -398,3 +398,16 @@ PC 포맷으로 git 밖 자료(스냅숏 원자료 · 10-28 식품 처분 원본
   - 46 · 47행(87개 법령 · 26개 법률)은 바뀌지 않아 그대로
 - 확인: `grep -rln --exclude-dir=.git "2026102[89]"`이 남겨 둘 기록(`api-cost` · `d1-checks` · `data-sources` · `PLAN` · `week1-notes` · 고정 자료)에만 나옴. dry-run CONSTANTS 대조 통과, `pytest` 189 통과 · 1 건너뜀
 - 복구 완료. 남은 일: 11-09 사용자 PREREG 검토 → `prereg.py lock` → `--heldout check --out eval/evalset/v1` → 해시 4종 `amend` → `prereg.py check` → 백업 1
+
+### 잠금 해시 줄 끝 정규화 (11-09, 잠금 전)
+
+- **문제:** Git for Windows 기본 설정(`C:/Program Files/Git/etc/gitconfig`)에 `core.autocrlf=true`가 켜져 있고 `.gitattributes`가 없다. 그래서 추적 파일 105개가 모두 저장소에는 LF(`i/lf`), 작업 사본에는 CRLF(`w/crlf`)로 들어 있다. `prereg.py`는 파일 바이트를 그대로 해시했기 때문에 다음 두 경우에 해시가 어긋난다.
+  - 잠근 뒤 WSL · Linux · 설정이 다른 PC에서 클론하면, 내용이 같아도 잠금 대상 전부가 "기록 없는 변경"으로 나온다. `eval/PREREG.md`의 경우 작업 사본은 `dfca4022…`, git의 LF 판은 `2a7ae798…`이다.
+  - 생성기가 LF로 쓴 v1 산출물을 Windows에서 다시 체크아웃하면 CRLF가 되어, AMENDMENTS에 적은 해시와 다르게 나온다.
+- **고침:** `eval/prereg.py`의 `sha256`은 텍스트 확장자(`TEXT_SUFFIXES`: md · py · yaml · yml · json · jsonl · cypher · txt · tsv · csv)이면 CRLF를 LF로 바꾼 뒤 해시한다. 그 밖의 파일(GGUF · safetensors · dump)은 바이트 그대로 해시해서 표준 `sha256sum`과 같은 값이 나온다. PREREG 225 · 226행의 모델 해시가 여기에 해당한다. `prereg.py`는 잠금 대상이 아니다.
+  - `.gitattributes`로 LF를 고정하는 방법은 쓰지 않았다. git으로 받을 때만 막고 편집기가 CRLF로 저장하는 경우는 막지 못하며, 105개 파일을 다시 정규화해야 하기 때문이다.
+  - 테스트 2개를 추가했다. LF로 잠근 뒤 CRLF로 바꿔도 기준과 같은지(내용이 바뀌면 여전히 잡는지), 바이너리는 바이트 그대로 재는지를 본다.
+- **확인:**
+  - 잠금 대상 27개 파일 중 26개가 git HEAD의 LF 판과 해시가 같다. 다른 1개는 커밋 전인 `build_evalset.py`다.
+  - 생성기가 출력하는 산출물 해시(LF 바이트)도 같은 방식의 값이다.
+  - dry-run 정상, `pytest` 176 통과 · 16 건너뜀(Docker 꺼짐).

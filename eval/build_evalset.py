@@ -765,7 +765,8 @@ def print_report(r: dict, held_note: str) -> None:
     print(f"10. 숨은 조건으로 버린 T4 슬롯: m2_case(구법 참조 있음, 정답 있는 것) {r['m2_case_hidden_dropped']}; "
           f"M4 풀까지 걸러진 조문 {r['m4_filtered']}; 정답 200행 초과 · 빈 정답으로 빠진 슬롯 {r['row_cap_dropped']}")
     print("11. 템플릿 실행 확인: `scripts/check_templates.py`로 따로 확인"
-          "(결과: `docs/week1-notes.md` D4, 532 슬롯 불일치 0)")
+          "(결과: `eval/PREREG.md` \"D4 dry-run 결과\" 절 · `docs/week1-notes.md` 복구 절, "
+          f"스냅숏 {SNAPSHOT}에서 532 슬롯 불일치 0)")
     print(f"12. held-out 단위 선택: {r['heldout']} ({held_note})")
     for t in ("T1", "T3"):
         test = [x["meta"]["rep_law_articles"] for x in items if x["type"] == t and x["split"] == "test"]

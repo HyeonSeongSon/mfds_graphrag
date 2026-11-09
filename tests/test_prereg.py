@@ -82,6 +82,27 @@ def test_amendment_chain_tamper_detected(repo: Path) -> None:
         prereg.amendments_entries(repo)
 
 
+def test_line_endings_do_not_change_hash(repo: Path) -> None:
+    """LF로 잠근 뒤 CRLF로 체크아웃해도(또는 그 반대) 같은 내용이면 기준과 같다. 내용이 바뀌면 여전히 잡는다."""
+    files = [repo / "eval/PREREG.md", repo / "mfds/refs.py", repo / "schema/eval_cypher/t2.cypher"]
+    for p in files:
+        p.write_bytes(p.read_bytes().replace(b"\r\n", b"\n"))
+    prereg.lock(repo, TARGETS)
+    for p in files:
+        p.write_bytes(p.read_bytes().replace(b"\n", b"\r\n"))
+    assert prereg.prereg_status(repo)["ok"]
+    assert prereg.sha256(files[1]) == prereg.hashlib.sha256(b"X = 1\n").hexdigest()
+    files[1].write_bytes(b"X = 2\r\n")
+    assert prereg.prereg_status(repo)["status"]["mfds/refs.py"] == "기록 없는 변경(탐색적)"
+
+
+def test_binary_hashed_as_is(tmp_path: Path) -> None:
+    """모델 파일 · 덤프는 바이트 그대로 잰다(표준 sha256sum과 같고, 안의 CRLF 바이트를 바꾸지 않음)."""
+    raw = b"GGUF\x00\r\n\x01"
+    (tmp_path / "m.gguf").write_bytes(raw)
+    assert prereg.sha256(tmp_path / "m.gguf") == prereg.hashlib.sha256(raw).hexdigest()
+
+
 def test_read_constants(repo: Path) -> None:
     assert prereg.read_constants(repo) == {"SEED": 1}
     assert json.loads(json.dumps(prereg.read_constants(repo)))["SEED"] == 1
