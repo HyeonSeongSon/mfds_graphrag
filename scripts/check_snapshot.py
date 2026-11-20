@@ -4,6 +4,7 @@
 """
 
 import hashlib
+import json
 import os
 import re
 import sys
@@ -57,6 +58,13 @@ def main() -> None:
     raw = [r for r in read_rows(S, keep_pii=True)]
     # 업소명만 짧게 맞는 값(5자 미만)은 일반 낱말일 수 있어 참고로만 센다(2026-10-29 검수: 4자 업소명 1개가 일반어)
     strong = {r[c] for r in raw for c in PII if r.get(c) and len(r[c]) >= (5 if c == "PRCSCITYPOINT_BSSHNM" else 4)}
+    # 의약품 · 화장품 처분(drugdisp, 원본 JSON): 업체명 5자 이상 · 사업자번호(10자리)를 같은 방식으로 찾는다.
+    # ADDR은 시 · 군 · 구까지만 있는 짧은 값(최대 15자)이고 ENTP_NO는 8자리 숫자라 지역명 · 날짜와 겹쳐 대조하지 않는다
+    # (2026-11-20 확인: 두 열이 고정 자료의 지역명 · 날짜와 겹친 오탐 6파일)
+    drug_raw = [i for p in sorted((S / "drugdisp").glob("p*.json"))
+                for i in (json.loads(p.read_bytes())["body"].get("items") or [])]
+    strong |= {str(i[c]) for i in drug_raw for c, n in (("ENTP_NAME", 5), ("BIZRNO", 10))
+               if i.get(c) and len(str(i[c])) >= n}
     weak = {r[c] for r in raw if 4 <= len(r.get("PRCSCITYPOINT_BSSHNM") or "") < 5
             for c in ("PRCSCITYPOINT_BSSHNM",)} - strong
     tracked = os.popen(f'git -C "{ROOT}" ls-files --cached --others --exclude-standard').read().split()
@@ -164,6 +172,20 @@ def main() -> None:
     check(len(rows_) == len({r["DSPSDTLS_SEQ"] for r in rows_}) == 5319, f"식품 처분 {len(rows_):,}행 · ID 고유")
     print(f"- 참고: 처분 확정일 {dates[0]} ~ {dates[-1]}, 빈 근거 조항 {sum(not r['LAWORD_CD_NM'].strip() for r in rows_)}, "
           f"빈 위반 내용 {sum(not r['VILTCN'].strip() for r in rows_)}")
+    pages = sorted((S / "drugdisp").glob("p*.json"))
+    if not pages:
+        print("- 참고: drugdisp(의약품 · 화장품 처분) 없음 — 건너뜀")
+    else:
+        bodies = [json.loads(p.read_bytes())["body"] for p in pages]
+        total = int(bodies[0]["totalCount"])
+        seqs = [str(i.get("ADM_DISPS_SEQ") or "") for i in drug_raw]
+        check(len(seqs) == total and "" not in seqs and len(set(seqs)) == len(seqs),
+              f"의약품 · 화장품 처분 {len(seqs):,}건 = totalCount {total:,} · ADM_DISPS_SEQ 고유")
+        check(all("serviceKey=***" in r[3] for r in rows if r[0] == "drugdisp"), "drugdisp URL 전부 serviceKey 가림")
+        ddates = sorted(str(i.get("LAST_SETTLE_DATE") or "") for i in drug_raw if i.get("LAST_SETTLE_DATE"))
+        print(f"- 참고: 의약품 · 화장품 처분일 {ddates[0]} ~ {ddates[-1]}, "
+              f"빈 위반내용 {sum(not str(i.get('EXPOSE_CONT') or '').strip() for i in drug_raw)}, "
+              f"빈 근거법령 {sum(not str(i.get('BEF_APPLY_LAW') or '').strip() for i in drug_raw)}")
 
     print(f"\n## 결과: 문제 {len(problems)}건")
     for p in problems:

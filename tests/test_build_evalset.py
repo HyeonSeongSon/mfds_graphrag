@@ -35,6 +35,8 @@ def test_generator_does_not_import_loader() -> None:
     for f in ("build_evalset.py", "sources.py", "grouping.py"):
         names = _imports(ROOT / "eval" / f)
         assert not any(n.startswith("mfds.load") for n in names), (f, names)
+        # mfds.disposition은 식품 처분 읽기 · 라벨과 의약품 · 화장품 처분(T7) 읽기 · 근거법령 분할을 적재기와 공유한다
+        # (정답 독립성 예외, PREREG 4-1)
         allowed = {"mfds.refs", "mfds.ingredients", "mfds.disposition", "mfds.collect"}
         assert {n for n in names if n.startswith("mfds")} <= allowed, (f, names)
 
@@ -126,7 +128,8 @@ def test_write_needs_lock_and_heldout_check(tmp_path, monkeypatch) -> None:
 
 
 def _world(**kw) -> NS:
-    base = dict(laws={}, articles={}, delegations={}, precs={}, disp={}, dur=[], admin={}, sub={}, other_laws=[])
+    base = dict(laws={}, articles={}, delegations={}, precs={}, disp={}, dur=[], admin={}, sub={}, other_laws=[],
+                drug_disp={})
     base.update(kw)
     return NS(**base)
 
@@ -247,3 +250,81 @@ def test_check_rule_aborts_when_mask_misses(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(B.G, "mask_article_refs", lambda t: t)
     with pytest.raises(SystemExit):
         B.t1_t3_items(w, t1, Counter(), ["식품위생법 위반 내용: {violation}"], "violation")
+
+
+FAKE_CO = "가짜바이오제약"
+YAK = "001783"  # 약사법(처분 조문 목록 DISPOSITION_ARTICLES가 실제 법령ID를 쓴다)
+
+
+def _t7_world(tmp_path: Path, with_food: bool = False) -> NS:
+    """가짜 업체 의약품 처분 6건: 정상 4(그중 1건은 본문에 업체명 → 가림 → 원천 제외), 처분 조문만 1, 식품과 같은 번호 1."""
+    viol = ["품질 부적합 제품 판매", "제조관리기록서 미작성(제31조)", f"{FAKE_CO}이 허가 없이 제조", "소재지 멸실",
+            "업무정지 기간 중 제조", "표시기재 위반"]
+    basis = ["○ 위반법령: 「약사법」 제62조\n○ 처분근거법령: 「약사법」 제76조", "○ 「약사법」 제31조제4항, 제76조",
+             "○ 위반법령: 「약사법」 제31조", "○ 위반법령: 「약사법」 제31조", "○ 「약사법」 제76조",
+             "○ 위반법령: 「약사법」 제62조"]
+    rows = [{"ADM_DISPS_SEQ": str(i), "ENTP_NAME": f"(주){FAKE_CO}" if i == 3 else f"(주)가짜업체{i}",
+             "ADDR": "가짜도 가짜시", "BIZRNO": f"99999999{i:02d}", "ENTP_NO": f"9999{i:04d}", "EXPOSE_CONT": v,
+             "BEF_APPLY_LAW": b, "ADM_DISPS_NAME": "경고", "LAST_SETTLE_DATE": "20260101"}
+            for i, (v, b) in enumerate(zip(viol, basis), 1)]
+    d = tmp_path / "drugdisp"
+    d.mkdir(parents=True)
+    (d / "p001.json").write_text(json.dumps({"body": {"totalCount": len(rows), "items": rows}}, ensure_ascii=False),
+                                 encoding="utf-8")
+    ld = LawDict({"약사법": YAK}, {YAK: "법률"}, {YAK: "약사법"})
+    arts = {f"art:{YAK}:{n}": sources.Article(f"art:{YAK}:{n}", YAK, str(n), None, False, [(f"art:{YAK}:{n}", "본문")])
+            for n in (31, 62, 76)}
+    from mfds.disposition import read_drug_rows
+    drug = {r["ADM_DISPS_SEQ"]: r for r in read_drug_rows(tmp_path)}
+    return _world(S=tmp_path, laws={YAK: sources.Law(YAK, "약사법", "법률", None)}, articles=arts, lawdict=ld,
+                  resolver=Resolver(ld, set(arts)), drug_disp=drug)
+
+
+def test_t7_items_answer_violation_only_and_hide_company(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(B, "T1_T3_TEST", 2)
+    monkeypatch.setattr(B, "T1_T3_DEV", 1)
+    monkeypatch.setattr(B, "T1_T3_REQUIRED", 1)
+    w = _t7_world(tmp_path)
+    t7, freq = B.t7_pool(w, B.drug_answers(w))
+    items = B.t1_t3_items(w, t7, Counter(), ["위반 내용: {violation}"], "violation")
+    dump = json.dumps(items, ensure_ascii=False)
+    assert FAKE_CO not in dump and "가짜업체" not in dump and "가짜도" not in dump and "99999999" not in dump
+    sources_ = {x["meta"]["source"] for x in items}
+    assert "3" not in sources_ and "5" not in sources_  # 업체명 가림 처분 · 처분 조문만 있는 처분은 원천에서 빠진다
+    assert all(f"art:{YAK}:76" not in x["answer"]["uids"] for x in items)  # 처분 조문은 정답이 아니다
+    assert {tuple(x["answer"]["uids"]) for x in items} <= {(f"art:{YAK}:62",), (f"art:{YAK}:31",)}
+    assert all("제31조" not in x["question"] for x in items)
+    assert f"art:{YAK}:76" not in freq  # T7 전용 빈도에도 처분 조문은 없다
+
+
+def test_t7_fallback_keeps_neighbor_cap_and_uses_all_fillable(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(B, "T1_T3_TEST", 200)
+    monkeypatch.setattr(B, "T1_T3_DEV", 1)
+    monkeypatch.setattr(B, "T1_T3_REQUIRED", 230)
+    w = _t7_world(tmp_path)
+    t7, _ = B.t7_pool(w, B.drug_answers(w))
+    assert "T7 규칙" in t7.fallback and "상한 유지" in t7.fallback
+    assert len(t7.sel.test) == t7.sel.fillable - 1  # test = 채울 수 있는 수 − dev(절반이 아님)
+
+
+def test_t7_does_not_touch_food_pools_or_t3_freq(tmp_path, monkeypatch) -> None:
+    """식품 처분과 같은 번호의 의약품 처분이 있어도 T1 풀 · 식품 제외 집합 · T1 + T3 빈도는 그대로다."""
+    monkeypatch.setattr(B, "T1_T3_TEST", 2)
+    monkeypatch.setattr(B, "T1_T3_DEV", 1)
+    monkeypatch.setattr(B, "T1_T3_REQUIRED", 1)
+    food = _t1_world(tmp_path / "food")
+    t1_a, _, freq_a = B.t1_t3_pools(food, B.disposition_answers(food), {})
+    drug = _t7_world(tmp_path / "food")  # 같은 스냅숏 폴더에 의약품 처분을 더한다(번호 1~6이 식품 1~4와 겹친다)
+    food.drug_disp = drug.drug_disp
+    t1_b, _, freq_b = B.t1_t3_pools(food, B.disposition_answers(food), {})
+    assert t1_a.excluded == t1_b.excluded and freq_a == freq_b
+    assert set(B.disposition_answers(food)) == set(food.disp)  # 식품 정답은 식품 처분만
+
+
+def test_m2_label_uniqueness_counts_remaining_drug_texts() -> None:
+    """의약품 처분과 문구가 같은 식품 처분은 m2_disposition 슬롯 라벨이 유일하지 않으므로 뺀다(같은 Disposition 라벨)."""
+    import grouping as G
+    from collections import Counter as C
+    norm = C(G.normalize_violation(x) for x in ["(20250101)표시기재 위반"])
+    norm.update(G.normalize_violation(x) for x in ["표시기재 위반"])
+    assert norm[G.normalize_violation("표시기재 위반")] == 2

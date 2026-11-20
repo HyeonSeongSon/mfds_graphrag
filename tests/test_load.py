@@ -244,6 +244,42 @@ def test_disposition_refuses_rows_with_business_info(resolver) -> None:
         parse_disposition.parse([{**fixture_rows()[0], "ADDR": "가짜주소"}], resolver, set())
 
 
+
+YAK = "001783"
+DRUG_LD = LawDict({"약사법": YAK}, {YAK: "법률"}, {YAK: "약사법"})
+DRUG_KNOWN = {f"art:{YAK}:{n}" for n in (31, 62, 76)} | {f"par:{YAK}:31:4"}
+
+
+def _drug_rows() -> list[dict]:
+    return [{"ADM_DISPS_SEQ": "11", "EXPOSE_CONT": " ○ 품질 부적합\n 제품 판매", "ADM_DISPS_NAME": "경고",
+             "LAST_SETTLE_DATE": "20260101", "BEF_APPLY_LAW": "○ 위반법령: 「약사법」 제31조제4항\n○ 처분근거법령: 「약사법」 제76조"},
+            {"ADM_DISPS_SEQ": "12", "EXPOSE_CONT": "업무정지 기간 중 제조", "ADM_DISPS_NAME": "허가취소",
+             "LAST_SETTLE_DATE": "20260102", "BEF_APPLY_LAW": "○ 「약사법」 제76조"}]
+
+
+def test_drug_disposition_nodes_and_violation_only_based_on() -> None:
+    rows = _drug_rows()
+    g = parse_disposition.parse_drug(rows, Resolver(DRUG_LD, {a for a in DRUG_KNOWN if a.startswith("art:")}), DRUG_KNOWN)
+    p = g.nodes["disp:drug:11"][1]
+    assert p["source"] == "drug" and p["violation_text"] == disposition.drug_violation_text(rows[0]["EXPOSE_CONT"])
+    assert p["violation_text"] == "품질 부적합 제품 판매" and p["law_ref_text"] == rows[0]["BEF_APPLY_LAW"]
+    assert {(k[1], k[2]) for k in g.edges} == {("disp:drug:11", f"par:{YAK}:31:4")}  # 제76조(처분 조문)는 엣지가 아니다
+    assert g.stats["disp.drug 처분 노드"] == 2 and g.stats["disp.drug 위반 조문 없음(처분 조문만 · 해석 실패)"] == 1
+    with pytest.raises(ValueError, match="업체 정보"):
+        parse_disposition.parse_drug([{**rows[0], "ENTP_NAME": "가짜"}], Resolver(DRUG_LD), DRUG_KNOWN)
+
+
+def test_drug_disposition_absent_folder_is_zero() -> None:
+    g = parse_disposition.parse_drug([], Resolver(DRUG_LD), DRUG_KNOWN)
+    assert not g.nodes and g.stats["disp.drug 처분 0(스냅숏에 없음)"] == 1
+
+
+def test_drug_disposition_duplicate_seq_counted_once() -> None:
+    rows = _drug_rows()
+    g = parse_disposition.parse_drug(rows + [rows[0]], Resolver(DRUG_LD), DRUG_KNOWN)
+    assert g.stats["disp.drug 처분 ID 중복"] == 1 and g.stats["disp.drug 처분 노드"] == 2
+
+
 # CITES
 
 def test_cites_whole_article_context_and_recitation(resolver) -> None:
@@ -293,6 +329,12 @@ def test_exclusion_removes_nodes_and_edges(graph, tmp_path: Path) -> None:
         f.write_text(json.dumps(bad), encoding="utf-8")
         with pytest.raises(SystemExit):
             load_exclusion(f)
+    # 의약품 · 화장품 처분은 선택 키 drug_disposition(uid만). 식품 숫자 ID와 섞지 않는다
+    f.write_text(json.dumps({"disposition": ["11"], "case": [], "drug_disposition": ["disp:drug:11"]}), encoding="utf-8")
+    assert load_exclusion(f) == {"disp:food:11", "disp:drug:11"}
+    f.write_text(json.dumps({"disposition": [], "case": [], "drug_disposition": ["11"]}), encoding="utf-8")
+    with pytest.raises(SystemExit, match="disp:drug"):
+        load_exclusion(f)
 
 
 def test_cli_dry_run_and_eval_needs_exclusion(snap, tmp_path: Path, monkeypatch, capsys) -> None:
@@ -309,6 +351,10 @@ def test_cli_dry_run_and_eval_needs_exclusion(snap, tmp_path: Path, monkeypatch,
     assert "Disposition\t4" in out and "dry-run" in out and "no_context" in out
     # 그래프에 없는 ID(형식이 어긋난 사건번호 등)가 있으면 멈춘다
     ex.write_text(json.dumps({"disposition": ["4632752"], "case": ["2020도1234"]}), encoding="utf-8")
+    with pytest.raises(SystemExit, match="그래프에 없다"):
+        cli.main()
+    # 의약품 처분 uid도 그래프에 있는지 확인한다(고정 스냅숏에는 drugdisp가 없다)
+    ex.write_text(json.dumps({"disposition": [], "case": [], "drug_disposition": ["disp:drug:1"]}), encoding="utf-8")
     with pytest.raises(SystemExit, match="그래프에 없다"):
         cli.main()
 

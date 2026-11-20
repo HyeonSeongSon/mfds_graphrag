@@ -3,7 +3,7 @@
 #   Ingredient → Ingredient.name(정규화한 이름, 예: methotrexate)
 #   Article → Law.name + "제{number}조"(branch가 있으면 "의{branch}"), 예: "약사법 제23조의2"
 #   Case → Case.court + " " + case_no + " 판결", 예: "대법원 2025도16747 판결"
-#   Disposition → Disposition.violation_text 값 그대로(요약하지 않음). 슬롯은 평가용 그래프에서 이 값이 유일한 처분만
+#   Disposition → Disposition.violation_text 값 그대로(요약하지 않음). 슬롯은 식품 처분이고, 평가용 그래프(의약품 · 화장품 처분 포함)에서 이 값이 유일한 처분만
 #   target_kind → 시행령(대통령령) · 시행규칙(총리령)
 #   industry · disp_type → Disposition.industry · type 값 그대로
 # 문항마다 템플릿 하나를 시드 순서로 고른다.
@@ -39,12 +39,12 @@ intents:
       - "{article_label}를 근거로 언급하는 다른 조문이나 고시 조항은 어디에 있나요?"
   - intent: t6_dispositions_by_article
     templates:
-      - "{article_label} 위반으로 공개된 행정처분은 몇 건인가요?"
+      - "{article_label} 위반으로 공개된 식품 행정처분은 몇 건인가요?"
       - "{article_label}를 근거로 한 식품 행정처분 건수를 알려 주세요."
   - intent: t6_dispositions_by_industry_type
     templates:
-      - "{industry} 업종에서 {disp_type} 처분은 몇 건인가요?"
-      - "공개된 행정처분 중 {industry}의 {disp_type} 건수를 알려 주세요."
+      - "식품 행정처분 중 {industry} 업종의 {disp_type} 처분은 몇 건인가요?"
+      - "공개된 식품 행정처분 중 {industry}의 {disp_type} 건수를 알려 주세요."
   - intent: t6_pair_rules_by_ingredient
     templates:
       - "{ingredient_label}와 병용금기로 지정된 조합은 몇 개인가요?"

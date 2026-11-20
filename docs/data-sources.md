@@ -6,7 +6,7 @@
 
 - 스냅숏: 수집 한 번 = 폴더 하나(`data/raw/<수집일>/`, git 제외). 같은 폴더의 `manifest.tsv`(출처 · ID · 키를 가린 URL · sha256 · 크기 · 시각)만 커밋한다
 - 요청은 초당 1회. 끊기면 같은 명령을 다시 실행해 이어받는다(받은 파일은 건너뜀). 진행은 manifest 줄 수로 본다
-- 키는 `.env`(`LAW_OC`, `FOODSAFETY_KEY`)에서 읽고 manifest · 로그에 남기지 않는다
+- 키는 `.env`(`LAW_OC`, `FOODSAFETY_KEY`, `DATA_GO_KR_KEY`)에서 읽고 manifest · 로그에 남기지 않는다
 
 ## 국가법령정보 공동활용 (`https://www.law.go.kr/DRF`, `LAW_OC`)
 
@@ -42,11 +42,24 @@
 - 키가 없을 때(현재): 사용자가 2026-11-05에 직접 받은 `data/raw/manual/foodsafety/I0470.csv.gz`(고유 5,319건, 스냅숏 밖 원본)를 새 스냅숏으로 복사한다(요청 0회). manifest에 원본 sha256과 "사용자 수동 수집, 2026-11-05"를 적는다. 처분 범위는 처분 확정일 2024-11-05 ~ 2026-11-04(공개 기간 약 2년, `PUBLIC_DT` = 확정일 + 729일인 행이 4,972 / 5,319건, 나머지 347건은 공개 기간이 다름). 10-28에 받은 원본(5,417건)은 PC 포맷으로 사라졌다(`PLAN.md` 변경 이력 20차)
 - 업소 정보 열(`PRCSCITYPOINT_BSSHNM` · `ADDR` · `TELNO` · `PRSDNT_NM` · `LCNS_NO`)은 원본 스냅숏(git 제외)에만 남고, 적재기 · 평가셋 생성기가 읽을 때 지운다. 같은 업소 이웃 조건은 생성기가 메모리에서만 만든다(`d1-checks.md` "같은 업소 처분 검토")
 
+## 공공데이터포털 (`DATA_GO_KR_KEY`)
+
+| 수집기 | 서비스 | 범위 |
+|---|---|---|
+| `drugdisp.py` | 식품의약품안전처_의약품 행정처분 정보(`MdcinExaathrService04/getMdcinExaathrList04`) | 공개 중인 처분 전부. 2026-11-20 수집 544건(처분 확정일 2022-12-09 ~ 2026-11-19), 화장품법 처분 포함 |
+
+- 2026-11-20 사용자 결정으로 평가 유형 T7(의약품 · 화장품 처분 → 위반 조항)의 원천이 됐다(10-29 15차의 "범위 밖"을 뒤집음, `PLAN.md` 변경 이력 25차). 그래프에는 `Disposition`(`source='drug'`, uid `disp:drug:{ADM_DISPS_SEQ}`)으로 들어가고, `BASED_ON`은 근거법령(`BEF_APPLY_LAW`)의 위반 부분 조문만이다(`mfds.disposition.basis_articles`)
+- 쪽당 100건 JSON(`data/raw/<수집일>/drugdisp/p00N.json`). 검사: `resultCode == "00"`, 모은 수 = `totalCount`, `ADM_DISPS_SEQ` 고유(`scripts/check_snapshot.py`). manifest URL의 `serviceKey`는 가린다
+- 키: 포털의 Encoding 키(퍼센트 인코딩됨)를 그대로 URL에 붙인다. Decoding 키를 넣으면 수집기가 `quote`한다. Encoding 키를 한 번 더 인코딩하면 `SERVICE_KEY_IS_NOT_REGISTERED`(403)가 난다
+- 업체 정보 열(`ENTP_NAME` · `ADDR` · `BIZRNO` · `ENTP_NO`)은 원본 스냅숏(git 제외)에만 남고, 읽을 때 본문(`EXPOSE_CONT` · `ADM_DISPS_NAME`)에서 가린 뒤 열을 지운다. 인명은 규칙(이름 + 직함 · 직함 + 이름 · 부분 가림)으로 `<인명>`으로 바꾼다. 규칙에 걸리지 않는 인명 · 제품명 · 다른 업체 이름은 남을 수 있다(PREREG T7 한계)
+- 이용허락범위: 포털 표시 "이용허락범위 제한 없음"(제공기관 식품의약품안전처, 2026-11-20 확인). 평가 문항을 공개할 때 출처를 적는다
+- 의약품안전나라(nedrug) 웹 상세 화면은 `robots.txt`가 `Disallow: /`라 자동 수집하지 않는다. 같은 화면의 엑셀 내려받기에는 위반내용 · 근거법령 열이 없다(vault `wiki/sources/mfds-drug-cosmetic-disposition-fields-20261120.md`)
+
 ## 범위 밖
 
 | 자료 | 이유 |
 |---|---|
-| 의약품 · 화장품 행정처분(공공데이터포털) | 스키마 범위 밖, 평가 · 핵심 성과에 쓰이지 않음(15차). `DATA_GO_KR_KEY`는 현재 미사용 |
 | 의약품안전나라 DUR 성분 목록 | DurRule 원천은 병용금기 고시 별표. 건수 대조는 D1에 끝남(`d1-checks.md`) |
+| 의약품 품목 · 성분 매핑 | 제품 · 성분에서 출발하는 질문("A 성분이 든 제품이 약사법 위반인가")은 품목 · 성분 → 조문 연결이 필요하다. 4주 범위 밖(`schema.yaml` `out_of_scope`). T7은 위반 문구에서 조문을 찾는 과제만 잰다 |
 | 헌재 결정례 | 본문 언급만으로 잡혀 잡음이 많음 |
 | 법령 연혁 · 첨부파일 고시 본문(식품공전 등) | 4주 범위 밖(`schema.yaml` `out_of_scope`) |

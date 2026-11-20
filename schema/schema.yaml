@@ -54,10 +54,10 @@ nodes:
     uid: "decc:{decc_id}"
     props: [decc_id, title, date, order, claim, reason]
   Disposition:
-    uid: "disp:food:{seq}"
-    example: "disp:food:20250000123456"
+    uid: "disp:food:{seq} | disp:drug:{seq}"
+    example: "disp:food:20250000123456 · disp:drug:2026008196"
     props: [seq, source, industry, violation_text, type, content, decided_at, law_ref_text]
-    note: "seq = DSPSDTLS_SEQ. violation_text는 원문에서 앞의 (YYYYMMDD) 날짜만 뗀 값. 업소명 · 주소 · 전화 · 대표자 · 인허가번호는 넣지 않는다"
+    note: "source = food(식품, seq = DSPSDTLS_SEQ) | drug(의약품 · 화장품, seq = ADM_DISPS_SEQ, industry · type 없음). 식품 violation_text는 원문에서 앞의 (YYYYMMDD) 날짜만 뗀 값, drug는 줄바꿈 · 연속 공백을 한 칸으로 · 앞머리 글머리표를 뗀 값(mfds.disposition.drug_violation_text). 업소 · 업체 정보(업소명 · 업체명 · 주소 · 전화 · 대표자 · 인허가번호 · 사업자번호)는 넣지 않는다. drug 본문의 업체명 · 인명은 가림 표시로 바꾼다"
   Ingredient:
     uid: "ing:{name}"
     example: "ing:methotrexate, ing:atorvastatin + amlodipine"
@@ -79,7 +79,7 @@ edges:
   CITES:         {from: [Article, Paragraph, Item, AdminArticle], to: [Article, Paragraph], when: "1주차 D5", how: "mfds/refs.py",
                   props: [raw, historical]}
   BASED_ON_LAW:  {from: AdminRule, to: [Article, Paragraph], when: "1주차 D5", how: "고시 본문의 근거 조항 + refs.py"}
-  BASED_ON:      {from: Disposition, to: [Article, Paragraph], when: "1주차 D5", how: "LAWORD_CD_NM + refs.py"}
+  BASED_ON:      {from: Disposition, to: [Article, Paragraph], when: "1주차 D5", how: "food: LAWORD_CD_NM + refs.py / drug: BEF_APPLY_LAW의 위반 부분 조문만(mfds.disposition.basis_articles, 처분 조문 · 별표 제외) + refs.py"}
   REFERENCES:    {from: [Case, Interpretation, AdminAppeal], to: [Article, Paragraph], props: [source, historical],
                   when: "1주차 D5(source=field) · 2주차 D2(source=extracted, 필드 없는 문서만)", how: "참조조문 필드 + refs.py / API 추출 + refs.py"}
   CITES_CASE:    {from: Case, to: Case, when: "1주차 D5", how: "참조판례 필드"}
@@ -99,7 +99,7 @@ text2cypher_lookup:
   Article: "Law.name + Article.number · branch (「약사법 제23조의2」 → name '약사법', number 23, branch 2)"
   Law: "name · abbr · kind"
   Case: "court · case_no (「대법원 2025도16747 판결」)"
-  Disposition: "violation_text · industry · type"
+  Disposition: "violation_text · industry · type · source (food 식품 | drug 의약품 · 화장품)"
   DurRule: "type (pair | age | preg)"
 
-out_of_scope: [Term 노드, 법령 연혁(시점 질의), 첨부파일 고시 본문(식품공전 등), 의약품 처분 · 품목 매핑]
+out_of_scope: [Term 노드, 법령 연혁(시점 질의), 첨부파일 고시 본문(식품공전 등), 의약품 품목 · 성분 매핑]

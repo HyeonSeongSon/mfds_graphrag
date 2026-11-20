@@ -8,7 +8,7 @@ import time
 from collections import Counter
 from pathlib import Path
 
-from mfds.disposition import read_rows
+from mfds.disposition import read_drug_rows, read_rows
 from mfds.load import cites, parse_admrul, parse_decisions, parse_disposition, parse_dur, parse_law
 from mfds.load.graph import Graph
 from mfds.refs import LawDict, Resolver, article_set
@@ -65,6 +65,7 @@ def build_graph(snapshot: Path) -> tuple[Graph, dict[str, float]]:
     lap("판례 · 해석례 · 심판")
 
     g.update(parse_disposition.parse(read_rows(snapshot), resolver, known))
+    g.update(parse_disposition.parse_drug(read_drug_rows(snapshot), resolver, known))
     lap("처분")
 
     g.update(cites.build(g.cite_units, resolver, known))
@@ -76,10 +77,12 @@ def build_graph(snapshot: Path) -> tuple[Graph, dict[str, float]]:
 
 
 def load_exclusion(path: Path) -> set[str]:
-    """`eval/exclusion_ids.json`의 `disposition`(DSPSDTLS_SEQ 또는 uid) · `case`(판례일련번호 또는 uid) → 뺄 노드 uid.
+    """`eval/exclusion_ids.json`의 `disposition`(식품 DSPSDTLS_SEQ 또는 uid) · `case`(판례일련번호 또는 uid) ·
+    `drug_disposition`(의약품 · 화장품 처분 uid `disp:drug:…`, 선택 키) → 뺄 노드 uid.
 
-    다른 키(슬롯 조합 · 거절 세트 이름 등)는 적재기가 쓰지 않는다. 평가 그래프는 T1 · T3를 함께 빼므로 두 키 중 하나라도
-    없으면 잘못된 파일로 보고 멈춘다(빈 목록은 허용).
+    식품 · 의약품 처분 번호는 값이 겹칠 수 있어 키를 나눈다(숫자만 있는 값은 늘 식품). 다른 키(슬롯 조합 · 거절 세트
+    이름 등)는 적재기가 쓰지 않는다. 평가 그래프는 T1 · T3를 함께 빼므로 `disposition` · `case` 중 하나라도 없으면
+    잘못된 파일로 보고 멈춘다(빈 목록은 허용).
     """
     data = json.loads(path.read_text(encoding="utf-8"))
     missing = {"disposition", "case"} - set(data)
@@ -87,7 +90,11 @@ def load_exclusion(path: Path) -> set[str]:
         raise SystemExit(f"{path}: {sorted(missing)} 키가 없다")
     disp = {x if str(x).startswith("disp:") else f"disp:food:{x}" for x in data.get("disposition", [])}
     case = {x if str(x).startswith("case:") else f"case:{x}" for x in data.get("case", [])}
-    return disp | case
+    drug = set(data.get("drug_disposition", []))
+    bad = sorted(x for x in drug if not str(x).startswith("disp:drug:"))
+    if bad:
+        raise SystemExit(f"{path}: drug_disposition 값은 disp:drug: uid여야 한다(예: {bad[:3]})")
+    return disp | case | drug
 
 
 def report(g: Graph) -> dict[str, Counter]:

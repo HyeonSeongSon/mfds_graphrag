@@ -1,10 +1,14 @@
 """평가셋 생성기 (1주차 D4에 잠금, PREREG 4-2 ~ 4-4). 스냅숏 원자료 → 문항 · 제외 목록 · M4 후보 · 데이터 카드.
 
 생성기는 Neo4j를 읽지 않고 `mfds/load/`를 import하지 않는다(정답 독립성). 원자료 읽기는 `eval/sources.py`, 예외 공유 모듈은
-`mfds.refs` · `mfds.ingredients` · `mfds.disposition` · `mfds.collect.dur`(표 파서)뿐이다. 시드는 인자로 받지 않고 PREREG
-CONSTANTS에서만 읽는다. 업소 정보는 같은 업소 이웃 계산에만 메모리에서 쓰고 출력 · 파일에 남기지 않는다.
+`mfds.refs` · `mfds.ingredients` · `mfds.disposition` · `mfds.collect.dur`(표 파서)뿐이다. `mfds.disposition`은 식품 처분
+읽기 · 라벨과 함께 의약품 · 화장품 처분(T7)의 읽기 · 근거법령 분할(`basis_articles`)도 적재기와 공유한다. 그래서 T7 분할
+오류는 그래프 대조로 잡히지 않고, 전수 분할 보고와 T7 라벨 검수로 보완한다(PREREG 4-1). 시드는 인자로 받지 않고 PREREG
+CONSTANTS에서만 읽는다. 업소 · 업체 정보는 같은 업소 이웃 계산에만 메모리에서 쓰고 출력 · 파일에 남기지 않는다.
 
-생성 순서(4-4): T1 · T3 선택 → 제외 목록 → 남은 원자료로 T2 · T4 · T6 슬롯 → 거절 세트 → held-out.
+생성 순서(4-4): T1 · T3 · T7 선택 → 제외 목록 → 남은 원자료로 T2 · T4 · T6 슬롯 → 거절 세트 → held-out.
+식품 처분(`disp`, DSPSDTLS_SEQ)과 의약품 · 화장품 처분(`drug_disp`, ADM_DISPS_SEQ)은 번호가 겹칠 수 있어 따로 둔다.
+T6 · m2 처분 슬롯과 식품 제외 집합에는 의약품 처분을 넣지 않는다.
 의도마다 dev · test 슬롯은 겹치지 않는다. 단계마다 시드에서 따로 만든 난수(`rng(단계)`)를 써서 한 단계를 바꿔도
 다른 단계의 순서가 흔들리지 않는다.
 
@@ -33,7 +37,8 @@ import grouping as G  # noqa: E402
 import m4_candidates as M4  # noqa: E402
 import prereg  # noqa: E402
 import sources as src  # noqa: E402
-from mfds.disposition import has_mask, read_rows, violation_text  # noqa: E402
+from mfds.disposition import (basis_articles, drug_violation_text, has_mask, read_drug_rows, read_rows,  # noqa: E402
+                              violation_text)
 from mfds.refs import LawDict, Resolver, _key, norm_text  # noqa: E402
 
 # PREREG CONSTANTS와 같아야 한다(시작할 때 대조, 다르면 중단)
@@ -119,6 +124,7 @@ class World:
     precs: dict
     disp: dict  # DSPSDTLS_SEQ → 행(업소 정보 열 없음), 스냅숏 처음 나온 행
     other_laws: list
+    drug_disp: dict = None  # ADM_DISPS_SEQ → 의약품 · 화장품 처분 행(업체 정보 열 없음, 본문 업체 정보 · 인명 가림)
 
 
 def load_world(S: Path) -> World:
@@ -128,9 +134,12 @@ def load_world(S: Path) -> World:
     disp = {}
     for r in read_rows(S):
         disp.setdefault(r["DSPSDTLS_SEQ"], r)
+    drug = {}
+    for r in read_drug_rows(S):
+        drug.setdefault(r["ADM_DISPS_SEQ"], r)
     return World(S, laws, lawdict, Resolver(lawdict, set(arts)), arts, src.admin_articles(S),
                  src.subordinate(S, set(laws)), src.delegations(S, laws, set(arts)), src.dur_rules(S),
-                 src.precedents(S), disp, src.other_laws(S))
+                 src.precedents(S), disp, src.other_laws(S), drug)
 
 
 # ---------- 라벨 ----------
@@ -209,13 +218,17 @@ class Pool:
     over_neighbor: int
 
 
-def _select(name: str, cands: list, freq: Counter, total: int) -> tuple[G.Selection, str, int]:
-    """시드 순서로 고르고 대체 규칙(4-2)을 적용한다."""
+def _select(name: str, cands: list, freq: Counter, total: int, fallback: str = "t1_t3") -> tuple[G.Selection, str, int]:
+    """시드 순서로 고르고 대체 규칙(4-2)을 적용한다. `fallback="t7"`: 이웃 상한을 올리지 않고(비율 검사도 없음) 바로
+    test를 (채울 수 있는 수 − dev)로 줄인다(처분 544건뿐이라 상한을 올리면 제외가 더 늘어난다, PREREG 4-2 T7)."""
     order = seeded(cands, f"{name}:order", key=lambda c: c.key)
     sel = G.select(order, freq, T1_T3_TEST, T1_T3_DEV)
     over = sum(len(c.excluded) > G.NEIGHBOR_MAX for c in cands)
     if sel.fillable >= T1_T3_REQUIRED:
         return sel, "적용 안 함", over
+    if fallback == "t7":
+        n_test = max(0, min(T1_T3_TEST, sel.fillable - T1_T3_DEV))
+        return G.select(order, freq, n_test, T1_T3_DEV), f"상한 유지 + test {n_test}로 축소(T7 규칙)", over
     up = G.select(order, freq, T1_T3_TEST, T1_T3_DEV, neighbor_max=NEIGHBOR_MAX_FALLBACK)
     ratio = len(set().union(*(c.excluded for c in up.test + up.dev))) / max(total, 1)
     note = f"상한 {NEIGHBOR_MAX_FALLBACK}"
@@ -272,6 +285,36 @@ def t1_t3_pools(w: World, disp_ans: dict, crefs: dict) -> tuple[Pool, Pool, Coun
               {pid: [r.uid for r in res.refs if not r.historical and not r.uid.startswith("anx:")]
                for pid, res in crefs.items()}, len(w.precs), fb, over)
     return t1, t3, freq
+
+
+def drug_answers(w: World) -> dict[str, dict]:
+    """의약품 · 화장품 처분 → 근거법령 분할 결과(위반 부분 조문이 정답, 적재기 `BASED_ON`과 같은 정의)."""
+    return {s: basis_articles(r.get("BEF_APPLY_LAW"), w.resolver.resolve) for s, r in (w.drug_disp or {}).items()}
+
+
+def t7_pool(w: World, basis: dict) -> tuple[Pool, Counter]:
+    """T7: T1과 같은 묶음 · 근접 중복 · 같은 업소 이웃 · 상한 규칙. 대표 조문 빈도는 T7 전용(T1 · T3 빈도와 섞지 않아
+    T3 대표 조문이 바뀌지 않는다). 가림 표시(업체명 · 인명 등)가 든 묶음은 원천에서 뺀다."""
+    drug = w.drug_disp or {}
+    answers = {s: b["violation"] for s, b in basis.items() if b["violation"]}
+    freq: Counter = Counter()
+    for a in answers.values():
+        freq.update(set(a))
+    key_of = {}
+    for r in read_drug_rows(w.S, keep_pii=True):
+        name = (r.get("ENTP_NAME") or "").strip()
+        key_of.setdefault(r["ADM_DISPS_SEQ"], name + (r.get("ADDR") or "") if name else "")
+    same = G.SameKey(key_of)
+    del key_of
+    raw = {s: r.get("EXPOSE_CONT") or "" for s, r in drug.items()}
+    groups = G.exact_groups(raw, G.normalize_violation)
+    groups = {k: v for k, v in groups.items() if not any(has_mask(raw[i]) for i in v)}
+    cands = G.build_candidates(groups, answers, G.NearDup(raw), same)
+    sel, fb, over = _select("t7", cands, freq, len(raw), fallback="t7")
+    pool = Pool("T7", sel, cands, set().union(*(c.excluded for c in sel.test + sel.dev)),
+                {s: drug_violation_text(t) for s, t in raw.items()}, answers,
+                {s: b["violation_refs"] for s, b in basis.items()}, len(raw), fb, over)
+    return pool, freq
 
 
 def law_ids_in(w: World, text: str) -> set[str]:
@@ -429,7 +472,9 @@ INTENT_TYPE: dict[str, str] = {}
 
 
 def t4_t6_slots(w: World, disp_ans: dict, crefs: dict, excl_disp: set, excl_case: set, citing: dict,
-                report: dict) -> dict[str, list[Slot]]:
+                report: dict, drug_left_texts: list[str] | None = None) -> dict[str, list[Slot]]:
+    """`drug_left_texts`: 평가 그래프에 남는 의약품 · 화장품 처분의 위반 문구. m2_disposition 라벨이 그래프 안에서
+    유일한지 셀 때 함께 센다(같은 Disposition 라벨이라 모델이 violation_text로 찾으면 섞일 수 있음)."""
     out: dict[str, list[Slot]] = {}
     statute = {lid for lid, l in w.laws.items() if l.kind == "법률"}
     kind_of = {a: w.laws[a.split(":")[1]].kind for a in w.articles}
@@ -459,6 +504,7 @@ def t4_t6_slots(w: World, disp_ans: dict, crefs: dict, excl_disp: set, excl_case
     # m2_disposition: 남은 처분, 정규화 문구가 남은 처분 안에서 유일, 가림 표시 · 조문 표기 없음 → 근거 조문의 위임 조문
     left = {s: r for s, r in w.disp.items() if s not in excl_disp}
     norm = Counter(G.normalize_violation(r.get("VILTCN") or "") for r in left.values())
+    norm.update(G.normalize_violation(x) for x in drug_left_texts or [])
     disps, art_ref = [], 0
     for s, r in left.items():
         label = violation_text(r.get("VILTCN"))
@@ -676,13 +722,24 @@ def build(S: Path, report: dict) -> dict:
     items += t1_t3_items(w, t3, left_t3, qs["t1_t3"]["t3"], "summary")
     report["t1"], report["t3"] = t1, t3
 
+    basis = drug_answers(w)
+    t7, _ = t7_pool(w, basis)
+    left_t7 = Counter(a for s, ans in t7.answers.items() if s not in t7.excluded for a in set(ans))
+    items += t1_t3_items(w, t7, left_t7, qs["t1_t3"]["t7"], "violation")
+    report["t7"] = t7
+    report["t7_basis"] = {"rows": len(basis), "empty_violation": sum(not b["violation"] for b in basis.values()),
+                          "unresolved": sum(b["unresolved"] for b in basis.values()),
+                          "dropped_disposition_articles": sum(b["dropped"] for b in basis.values()),
+                          "masked_rows": sum(has_mask(r.get("EXPOSE_CONT")) for r in (w.drug_disp or {}).values())}
+
     excl_slots: list[dict] = []
     t2, s2 = t2_items(w, tpl["t2_pair_contraindication"], report, ev["t2_pair_contraindication"]["n"]["dev"])
     items += t2
     excl_slots += s2
 
     citing = citing_index(w)
-    pools = t4_t6_slots(w, disp_ans, crefs, t1.excluded, t3.excluded, citing, report)
+    drug_left = [t for s, t in t7.texts.items() if s not in t7.excluded]
+    pools = t4_t6_slots(w, disp_ans, crefs, t1.excluded, t3.excluded, citing, report, drug_left)
     compare = []
     for intent, cands in pools.items():
         chosen = pick_slots(intent, cands, ev[intent]["n"], report)
@@ -721,6 +778,7 @@ def build(S: Path, report: dict) -> dict:
     return {
         "items": items, "refusal": refusal, "compare": compare, "m4_cands": m4_cands, "heldout": held,
         "exclusion": {"disposition": sorted(t1.excluded, key=int), "case": sorted(t3.excluded, key=int),
+                      "drug_disposition": [f"disp:drug:{s}" for s in sorted(t7.excluded, key=int)],
                       "slots": excl_slots, "refusal": used,
                       "questions": sorted({x["question"] for x in items + refusal})},
     }
@@ -742,20 +800,22 @@ def print_report(r: dict, held_note: str) -> None:
           f"{sum(v for (s, _), v in by_type.items() if s == 'dev')}, 거절 test {sum(1 for x in refusal if x['split'] == 'test')} · "
           f"dev {sum(1 for x in refusal if x['split'] == 'dev')}, M4 dev 예비 "
           f"{sum(1 for x in items if x['type'] == 'T4-M4' and x['meta'].get('reserve'))}")
-    for p in (r["t1"], r["t3"]):
+    for p in (r["t1"], r["t3"], r["t7"]):
         print(f"2. {p.name} 상한 20 적용 후 채울 수 있는 문항: {p.sel.fillable} (필요 {T1_T3_REQUIRED})")
-    for p in (r["t1"], r["t3"]):
+    for p in (r["t1"], r["t3"], r["t7"]):
         print(f"3. {p.name} dev-test 충돌로 버린 dev {p.sel.dev_dropped}, 이웃 포함 50건 초과 후보 {p.over_neighbor}/{len(p.cands)}")
-    for p in (r["t1"], r["t3"]):
+    for p in (r["t1"], r["t3"], r["t7"]):
         print(f"4. {p.name} 대체 규칙: {p.fallback}")
-    for p in (r["t1"], r["t3"]):
-        print(f"5. {p.name} 제외 목록 {len(p.excluded):,}건 / 전체 {p.total:,} = {len(p.excluded) / p.total:.1%} (기준 30%)")
-    for t in ("T1", "T3"):
+    for p in (r["t1"], r["t3"], r["t7"]):
+        note = " (T7은 30% 기준을 적용하지 않음)" if p.name == "T7" else " (기준 30%)"
+        print(f"5. {p.name} 제외 목록 {len(p.excluded):,}건 / 전체 {p.total:,} = {len(p.excluded) / max(p.total, 1):.1%}{note}"
+              f", 남는 처분 {p.total - len(p.excluded):,}")
+    for t in ("T1", "T3", "T7"):
         test = [x for x in items if x["type"] == t and x["split"] == "test"]
         z = sum(x["meta"]["rep_left"] == 0 for x in test)
         f = sum(1 <= x["meta"]["rep_left"] <= 4 for x in test)
         print(f"6. {t} test 문항 중 대표 조문의 남은 원천 0건 {z} · 1~4건 {f} / {len(test)}")
-    for t in ("T1", "T3"):
+    for t in ("T1", "T3", "T7"):
         xs = [x for x in items if x["type"] == t]
         print(f"7. {t} 문항(dev + test {len(xs)}) 중 원문에 정답 조문이 읽힘 {sum(x['meta']['answer_in_original'] for x in xs)}, "
               f"가린 문항 {sum(x['meta']['article_masked'] for x in xs)}, 가린 뒤 남은 조문 참조 0(확인 규칙 통과), "
@@ -768,12 +828,15 @@ def print_report(r: dict, held_note: str) -> None:
           "(결과: `eval/PREREG.md` \"D4 dry-run 결과\" 절 · `docs/week1-notes.md` 복구 절, "
           f"스냅숏 {SNAPSHOT}에서 532 슬롯 불일치 0)")
     print(f"12. held-out 단위 선택: {r['heldout']} ({held_note})")
-    for t in ("T1", "T3"):
+    for t in ("T1", "T3", "T7"):
         test = [x["meta"]["rep_law_articles"] for x in items if x["type"] == t and x["split"] == "test"]
-        print(f"- {t} test 대표 조문 법령의 조문 수 중앙값: {statistics.median(test)}")
+        print(f"- {t} test 대표 조문 법령의 조문 수 중앙값: {statistics.median(test) if test else '-'}")
     print(f"- heldout_law(의료기기법 계열) 문항: {sum(x['meta'].get('heldout_law', False) for x in items)}")
     print(f"- T1 근거 조항 refs 중 구법 표시: {r['t1_historical_refs']}")
-    for p in (r["t1"], r["t3"]):  # select는 dev-test 충돌만 막는다(PREREG 4-4). 같은 split 안 이어짐은 수치로만 남긴다
+    b = r["t7_basis"]
+    print(f"- T7 근거법령 분할: 처분 {b['rows']:,}, 위반 조문 없음(처분 조문만) {b['empty_violation']}, 해석 실패 {b['unresolved']}, "
+          f"위반 줄에서 뺀 처분 조문 {b['dropped_disposition_articles']}, 가림 표시 든 처분 {b['masked_rows']}")
+    for p in (r["t1"], r["t3"], r["t7"]):  # select는 dev-test 충돌만 막는다(PREREG 4-4). 같은 split 안 이어짐은 수치로만 남긴다
         links = {s: sum(G.conflicts(a, b) for i, a in enumerate(xs) for b in xs[i + 1:])
                  for s, xs in (("test", p.sel.test), ("dev", p.sel.dev))}
         print(f"- {p.name} 같은 split 안에서 근접 중복 · 같은 업소로 이어진 문항 쌍: test {links['test']} · dev {links['dev']}")
