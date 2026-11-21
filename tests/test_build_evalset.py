@@ -257,12 +257,13 @@ YAK = "001783"  # 약사법(처분 조문 목록 DISPOSITION_ARTICLES가 실제 
 
 
 def _t7_world(tmp_path: Path, with_food: bool = False) -> NS:
-    """가짜 업체 의약품 처분 6건: 정상 4(그중 1건은 본문에 업체명 → 가림 → 원천 제외), 처분 조문만 1, 식품과 같은 번호 1."""
+    """가짜 업체 의약품 처분 7건: 정상 4(그중 1건은 본문에 업체명 → 가림 → 원천 제외), 처분 조문만 1, 식품과 같은 번호 1,
+    위반 쪽에 항 뒤 조가 붙은 표기(오타 의심 → 원천 제외) 1."""
     viol = ["품질 부적합 제품 판매", "제조관리기록서 미작성(제31조)", f"{FAKE_CO}이 허가 없이 제조", "소재지 멸실",
-            "업무정지 기간 중 제조", "표시기재 위반"]
+            "업무정지 기간 중 제조", "표시기재 위반", "시설 미비"]
     basis = ["○ 위반법령: 「약사법」 제62조\n○ 처분근거법령: 「약사법」 제76조", "○ 「약사법」 제31조제4항, 제76조",
              "○ 위반법령: 「약사법」 제31조", "○ 위반법령: 「약사법」 제31조", "○ 「약사법」 제76조",
-             "○ 위반법령: 「약사법」 제62조"]
+             "○ 위반법령: 「약사법」 제62조", "○ 위반법령: 「약사법」 제31조제4항제62조"]
     rows = [{"ADM_DISPS_SEQ": str(i), "ENTP_NAME": f"(주){FAKE_CO}" if i == 3 else f"(주)가짜업체{i}",
              "ADDR": "가짜도 가짜시", "BIZRNO": f"99999999{i:02d}", "ENTP_NO": f"9999{i:04d}", "EXPOSE_CONT": v,
              "BEF_APPLY_LAW": b, "ADM_DISPS_NAME": "경고", "LAST_SETTLE_DATE": "20260101"}
@@ -291,6 +292,7 @@ def test_t7_items_answer_violation_only_and_hide_company(tmp_path, monkeypatch) 
     assert FAKE_CO not in dump and "가짜업체" not in dump and "가짜도" not in dump and "99999999" not in dump
     sources_ = {x["meta"]["source"] for x in items}
     assert "3" not in sources_ and "5" not in sources_  # 업체명 가림 처분 · 처분 조문만 있는 처분은 원천에서 빠진다
+    assert "7" not in sources_ and "7" not in t7.answers  # 위반 쪽 붙은 조 표기(오타 의심) 처분도 빠진다
     assert all(f"art:{YAK}:76" not in x["answer"]["uids"] for x in items)  # 처분 조문은 정답이 아니다
     assert {tuple(x["answer"]["uids"]) for x in items} <= {(f"art:{YAK}:62",), (f"art:{YAK}:31",)}
     assert all("제31조" not in x["question"] for x in items)

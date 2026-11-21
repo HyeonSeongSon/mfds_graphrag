@@ -199,8 +199,27 @@ _SUB_BULLET = re.compile(r"^\s*[-·•ㆍ]")
 _ARTICLE_MENTION = re.compile(r"제\s*\d+\s*조|「")
 
 
+_DOUBLE_OPEN = re.compile(r"「(?:\s*「)+")
+_DOUBLE_CLOSE = re.compile(r"」(?:\s*」)+")
+
+
+# 항 · 호 바로 뒤(공백만 사이)에 붙은 "제N조". 원문에서는 오타("제76조제1항제3조" = 제3호)일 수도, 쉼표 누락(판례
+# "제37조 제1항제37조 제2항")일 수도 있어 고쳐 읽지 않는다. 위반 쪽에 있으면 그 처분을 T7 원천에서 뺀다.
+_GLUED_ARTICLE = re.compile(
+    r"제\s*\d+\s*조(?:\s*의\s*\d+)?"
+    r"(?:\s*제\s*\d+\s*항(?:\s*제\s*\d+\s*호(?:\s*의\s*\d+)?)?|\s*제\s*\d+\s*호(?:\s*의\s*\d+)?)"
+    r"\s*제\s*\d+\s*조")
+
+
+def glued_article(line: str | None) -> bool:
+    """항 · 호 뒤에 구분자 없이 조가 붙은 표기가 있는가(오타 의심, 고쳐 읽지 않음)."""
+    return bool(_GLUED_ARTICLE.search(line or ""))
+
+
 def normalize_brackets(text: str) -> str:
-    return (text or "").replace("｢", "「").replace("｣", "」")
+    """｢｣ → 「」, 겹친 낫표(「「약사법」 · 원문 오타 2건)는 하나로. 겹친 채 두면 법령명을 못 읽어 그 조문이 빠진다."""
+    t = (text or "").replace("｢", "「").replace("｣", "」")
+    return _DOUBLE_CLOSE.sub("」", _DOUBLE_OPEN.sub("「", t))
 
 
 def split_basis(text: str | None) -> list[tuple[str, str]]:
@@ -243,11 +262,13 @@ DISPOSITION_ARTICLES = frozenset((
 
 def basis_articles(text: str | None, resolve, disposition_articles=DISPOSITION_ARTICLES) -> dict:
     """근거법령 → {"violation": [조문 uid], "violation_refs": [위반 부분 항 · 호 uid], "disposition": [조문 uid],
-    "unresolved": 해석 실패 수, "dropped": 위반 줄에서 뺀 처분 조문 수, "lines": [(라벨, 줄)]}. `resolve(text)`는 `Resolver.resolve`(결과에 `.refs` ·
+    "unresolved": 해석 실패 수, "dropped": 위반 줄에서 뺀 처분 조문 수, "glued_violation" · "glued_disposition": 항 · 호 뒤에
+    조가 붙은 표기(`glued_article`, 오타 의심)가 든 위반 · 처분 줄 수, "lines": [(라벨, 줄)]}. `resolve(text)`는 `Resolver.resolve`(결과에 `.refs` ·
     `.failures`). 상대 표기("같은 법 시행규칙")의 문맥은 같은 라벨의 가장 가까운 앞 줄로만 한정한다. 표지 없는 줄은
     조문이 모두 처분 조문이면 처분 부분으로 본다. 조문 uid는 항 · 호를 조문으로 올리고 별표는 뺀다."""
     lines = split_basis(text)
     viol, viol_refs, disp, unresolved, dropped, last = [], [], [], 0, 0, {}
+    glued = {"violation": 0, "disposition": 0}
     for label, line in lines:
         prev = last.get(label)
         res = resolve(f"{prev} {line}" if prev else line)
@@ -263,6 +284,8 @@ def basis_articles(text: str | None, resolve, disposition_articles=DISPOSITION_A
         last[label] = line
         if label == "unlabeled":
             label = "disposition" if arts and set(arts) <= disposition_articles else "violation"
+        if glued_article(line):
+            glued[label] += 1
         if label == "violation":
             keep = [a for a in arts if a not in disposition_articles]
             dropped += len(arts) - len(keep)
@@ -271,4 +294,5 @@ def basis_articles(text: str | None, resolve, disposition_articles=DISPOSITION_A
         else:
             disp += arts
     return {"violation": list(dict.fromkeys(viol)), "violation_refs": list(dict.fromkeys(viol_refs)),
-            "disposition": list(dict.fromkeys(disp)), "unresolved": unresolved, "dropped": dropped, "lines": lines}
+            "disposition": list(dict.fromkeys(disp)), "unresolved": unresolved, "dropped": dropped,
+            "glued_violation": glued["violation"], "glued_disposition": glued["disposition"], "lines": lines}

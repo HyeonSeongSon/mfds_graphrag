@@ -61,8 +61,11 @@ def parse_drug(rows: list[dict[str, str]], resolver: Resolver, known: set[str]) 
                             "law_ref_text": law_ref}):
             g.stats["disp.drug 처분 ID 중복"] += 1
             continue
+        basis = basis_articles(law_ref, resolver.resolve)
+        if basis["glued_violation"]:  # 항 · 호 뒤 조가 붙은 표기(오타 의심). 엣지는 그대로 두고 건수만 남긴다(T7 원천에서는 빠짐)
+            g.stats["disp.drug 위반 쪽 붙은 조 표기(오타 의심)"] += 1
         n = 0
-        for ref in basis_articles(law_ref, resolver.resolve)["violation_refs"]:  # 식품처럼 항이 있으면 항으로(호 → 항)
+        for ref in basis["violation_refs"]:  # 식품처럼 항이 있으면 항으로(호 → 항)
             dst = article_or_paragraph(ref, known)
             if dst:
                 g.edge("BASED_ON", uid, dst)

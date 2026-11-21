@@ -172,6 +172,18 @@ def test_mask_article_refs_keeps_promulgation_numbers_and_words() -> None:
     assert g.has_article_ref("식품위생법 제44조 위반")
 
 
+def test_mask_article_refs_keeps_product_id_numbers_only_with_cue() -> None:
+    """품목 식별번호(단서어 + `제N호`)는 남기고, 단서어 없는 호 · 조문 뒤 호는 그대로 가린다(2026-11-21)."""
+    m = g.mask_article_refs
+    for s in ("의약품 ‘가짜주[허가번호 제8호]’의 일부", "품목명: 가짜환(품목허가번호 : 제40호)", "가짜액(신고번호: 제466호, 패키지제품)",
+              "가짜정(등록번호 제12호)", "가짜산(품목신고번호 제3호)"):
+        assert m(s) == s and not g.has_article_ref(s), s
+    assert m("약사법 제31조제4항제8호 위반") == "약사법 해당 조항 위반"
+    assert m("같은 조 제8호에 따른 허가번호를") == "해당 조항에 따른 허가번호를"
+    assert m("허가번호 제8호, 약사법 제31조 위반") == "허가번호 제8호, 약사법 해당 조항 위반"
+    assert m("허가번호를 받은 뒤 제8호에 해당") == "허가번호를 받은 뒤 해당 조항에 해당"
+
+
 def test_masked_text_leaves_no_refs_for_resolver() -> None:
     """가린 문장을 refs.py로 다시 읽어도 조문이 나오지 않는다(생성기 assert와 같은 검사)."""
     from mfds.refs import LawDict, Resolver

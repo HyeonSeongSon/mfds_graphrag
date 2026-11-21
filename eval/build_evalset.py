@@ -294,9 +294,10 @@ def drug_answers(w: World) -> dict[str, dict]:
 
 def t7_pool(w: World, basis: dict) -> tuple[Pool, Counter]:
     """T7: T1과 같은 묶음 · 근접 중복 · 같은 업소 이웃 · 상한 규칙. 대표 조문 빈도는 T7 전용(T1 · T3 빈도와 섞지 않아
-    T3 대표 조문이 바뀌지 않는다). 가림 표시(업체명 · 인명 등)가 든 묶음은 원천에서 뺀다."""
+    T3 대표 조문이 바뀌지 않는다). 가림 표시(업체명 · 인명 등)가 든 묶음은 원천에서 뺀다. 위반 쪽 줄에 항 · 호 뒤 조가
+    붙은 표기(`glued_article`, 오타 의심)가 있는 처분도 정답을 믿을 수 없어 원천에서 뺀다(고쳐 읽지 않음)."""
     drug = w.drug_disp or {}
-    answers = {s: b["violation"] for s, b in basis.items() if b["violation"]}
+    answers = {s: b["violation"] for s, b in basis.items() if b["violation"] and not b["glued_violation"]}
     freq: Counter = Counter()
     for a in answers.values():
         freq.update(set(a))
@@ -730,6 +731,8 @@ def build(S: Path, report: dict) -> dict:
     report["t7_basis"] = {"rows": len(basis), "empty_violation": sum(not b["violation"] for b in basis.values()),
                           "unresolved": sum(b["unresolved"] for b in basis.values()),
                           "dropped_disposition_articles": sum(b["dropped"] for b in basis.values()),
+                          "glued_violation_rows": sum(bool(b["glued_violation"]) for b in basis.values()),
+                          "glued_disposition_rows": sum(bool(b["glued_disposition"]) for b in basis.values()),
                           "masked_rows": sum(has_mask(r.get("EXPOSE_CONT")) for r in (w.drug_disp or {}).values())}
 
     excl_slots: list[dict] = []
@@ -835,7 +838,8 @@ def print_report(r: dict, held_note: str) -> None:
     print(f"- T1 근거 조항 refs 중 구법 표시: {r['t1_historical_refs']}")
     b = r["t7_basis"]
     print(f"- T7 근거법령 분할: 처분 {b['rows']:,}, 위반 조문 없음(처분 조문만) {b['empty_violation']}, 해석 실패 {b['unresolved']}, "
-          f"위반 줄에서 뺀 처분 조문 {b['dropped_disposition_articles']}, 가림 표시 든 처분 {b['masked_rows']}")
+          f"위반 줄에서 뺀 처분 조문 {b['dropped_disposition_articles']}, 가림 표시 든 처분 {b['masked_rows']}, "
+          f"항 · 호 뒤 붙은 조 표기 위반 쪽 {b['glued_violation_rows']}(원천 제외) · 처분 쪽 {b['glued_disposition_rows']}(정답 무관)")
     for p in (r["t1"], r["t3"], r["t7"]):  # select는 dev-test 충돌만 막는다(PREREG 4-4). 같은 split 안 이어짐은 수치로만 남긴다
         links = {s: sum(G.conflicts(a, b) for i, a in enumerate(xs) for b in xs[i + 1:])
                  for s, xs in (("test", p.sel.test), ("dev", p.sel.dev))}

@@ -32,6 +32,27 @@ def test_halfwidth_brackets_and_unlabeled_disposition_line() -> None:
     assert res["violation"] == [f"art:{YAK}:31"] and f"art:{YAK}:76" in res["disposition"]
 
 
+def test_doubled_brackets_collapsed() -> None:
+    assert D.normalize_brackets("「「약사법」」 제62조") == "「약사법」 제62조"
+    res = arts("○ 위반법령: 「「약사법」제62조\n○ 처분법령: 「「약사법」제76조제1항")
+    assert res["violation"] == [f"art:{YAK}:62"] and f"art:{YAK}:76" in res["disposition"]
+
+
+def test_glued_article_detection() -> None:
+    for s in ("「약사법」제76조제1항제3조", "제257조 제1항제329조", "제37조 제1항 제37조 제2항", "제60조제1항제5호제2조"):
+        assert D.glued_article(s), s
+    for s in ("「약사법」제76조제1항, 제3조", "제2조제3호제나목, 제4조제1항", "제62조(제조 등의 금지), 제66조",
+              "구 「약사법」(법률 제20328호로 개정되기 전의 것) 제32조", "법률 제1234호 제5조", "제76조제1항제2의3호"):
+        assert not D.glued_article(s), s
+
+
+def test_glued_article_counted_by_side() -> None:
+    res = arts("○ 위반법령: 「약사법」 제31조제4항제62조\n○ 처분법령: 「약사법」 제76조제1항제3조")
+    assert res["glued_violation"] == 1 and res["glued_disposition"] == 1
+    ok = arts("○ 위반법령: 「약사법」 제31조제4항\n○ 처분법령: 「약사법」 제76조제1항제3조")
+    assert ok["glued_violation"] == 0 and ok["glued_disposition"] == 1 and ok["violation"] == [f"art:{YAK}:31"]
+
+
 def test_disposition_article_mixed_in_violation_line_is_dropped() -> None:
     res = arts("○ 「약사법」 제62조, 제76조")
     assert res["violation"] == [f"art:{YAK}:62"] and res["dropped"] == 1
