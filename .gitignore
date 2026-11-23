@@ -17,3 +17,8 @@ unsloth_compiled_cache/
 # tools
 tools/
 data/bakeoff/
+# evaluation files containing disposition source text (PREREG J7, 2026-11-23): commit hashes and judgments only
+eval/evalset/v1/*.jsonl
+eval/evalset/v1/colloquial/
+eval/exclusion_ids.json
+eval/label_audit.csv
