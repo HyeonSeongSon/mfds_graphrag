@@ -299,6 +299,32 @@ def test_t7_items_answer_violation_only_and_hide_company(tmp_path, monkeypatch) 
     assert f"art:{YAK}:76" not in freq  # T7 전용 빈도에도 처분 조문은 없다
 
 
+def test_deleted_answer_articles_are_marked_without_reselection(tmp_path, monkeypatch) -> None:
+    """현행 본문이 "삭제"뿐인 정답 조문(2026-11-23): 선택은 그대로, 정답에 `deleted` · 메타 `answer_deleted`를 단다.
+    일부 삭제 문항의 파생 메타는 현행 정답 기준, 전부 삭제 문항은 선택 당시(원래 정답) 값."""
+    monkeypatch.setattr(B, "T1_T3_TEST", 10)
+    monkeypatch.setattr(B, "T1_T3_DEV", 1)
+    monkeypatch.setattr(B, "T1_T3_REQUIRED", 1)
+    w = _t7_world(tmp_path)
+    w.drug_disp["4"]["EXPOSE_CONT"] = "「약사법」 제62조를 위반한 소재지 멸실"
+    w.drug_disp["4"]["BEF_APPLY_LAW"] = "○ 위반법령: 「약사법」 제31조, 제62조"
+    w.drug_disp["1"]["EXPOSE_CONT"] = "「약사법」 제62조 위반 품질 부적합 제품 판매"
+    a62 = f"art:{YAK}:62"
+    t7_live = B.t7_pool(w, B.drug_answers(w))[0]
+    live = {x["meta"]["source"]: x for x in B.t1_t3_items(w, t7_live, Counter(), ["위반 내용: {violation}"], "violation")}
+    w.articles[a62] = sources.Article(a62, YAK, "62", None, True, [(a62, "삭제 <2025.1.1>")])
+    t7, _ = B.t7_pool(w, B.drug_answers(w))
+    assert [c.key for c in t7.sel.test + t7.sel.dev] == [c.key for c in t7_live.sel.test + t7_live.sel.dev]  # 다시 뽑지 않음
+    items = {x["meta"]["source"]: x for x in B.t1_t3_items(w, t7, Counter(), ["위반 내용: {violation}"], "violation")}
+    some, whole, none_ = items["4"], items["1"], items["2"]
+    assert some["meta"]["answer_deleted"] == "some" and some["answer"]["deleted"] == [a62]
+    assert set(some["answer"]["uids"]) == {f"art:{YAK}:31", a62}  # 원래 정답은 그대로 남긴다
+    assert live["4"]["meta"]["answer_in_original"] and not some["meta"]["answer_in_original"]  # 현행 정답 기준
+    assert whole["meta"]["answer_deleted"] == "all" and whole["answer"]["deleted"] == [a62]
+    assert whole["meta"]["answer_in_original"] == live["1"]["meta"]["answer_in_original"] is True  # 선택 당시 값
+    assert none_["meta"]["answer_deleted"] == "none" and none_["answer"]["deleted"] == []
+
+
 def test_t7_fallback_keeps_neighbor_cap_and_uses_all_fillable(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(B, "T1_T3_TEST", 200)
     monkeypatch.setattr(B, "T1_T3_DEV", 1)

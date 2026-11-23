@@ -341,21 +341,28 @@ def t1_t3_items(w: World, pool: Pool, left: Counter, templates: list[str], slot:
                 raise SystemExit(f"{pool.name} {doc}: 조문 가린 질문에 refs 조문이 남았다")
             if law_ids_in(w, q_law):
                 raise SystemExit(f"{pool.name} {doc}: 법령명까지 가린 질문에 식약처 법령 토큰이 남았다")
-            gold_laws = {a.split(":")[1] for a in c.answer}
+            # 삭제 조문 정답(PREREG 4-2, 2026-11-23): 현행 본문이 "삭제"뿐인 조문. 선택은 원래 정답 그대로 두고(다시 뽑으면
+            # 연쇄로 바뀜) 표시만 한다. 파생 메타는 현행 정답 기준이며, 전부 삭제 문항은 원래 정답 기준 별도 줄로 보고하므로
+            # 선택 당시(원래 정답) 값을 둔다.
+            deleted = [a for a in c.answer if w.articles.get(a) is not None and w.articles[a].deleted]
+            current = [a for a in c.answer if a not in deleted] or c.answer
+            gold_laws = {a.split(":")[1] for a in current}
             got = law_ids_in(w, masked)
             rep_law = c.rep.split(":")[1]
             out.append({
                 "id": f"{split}:{pool.name.lower()}:{k:03d}", "split": split, "type": pool.name, "intent": None,
                 "template_idx": ti, "question": q, "question_unmasked": templates[ti].format(**{slot: raw}),
                 "question_law_masked": q_law, "slots": {},
-                "answer": {"uids": c.answer, "refs": list(dict.fromkeys(r for m in c.members for r in pool.refs.get(m, [])))},
+                "answer": {"uids": c.answer, "refs": list(dict.fromkeys(r for m in c.members for r in pool.refs.get(m, []))),
+                           "deleted": deleted},
                 "meta": {"source": doc, "members": c.members, "group_size": len(c.excluded), "rep": c.rep,
                          "rep_left": left[c.rep], "article_masked": masked != raw,
-                         "answer_in_original": bool(set(c.answer) & set(w.resolver.resolve(raw).article_uids)),
+                         "answer_deleted": "none" if not deleted else ("all" if len(deleted) == len(c.answer) else "some"),
+                         "answer_in_original": bool(set(current) & set(w.resolver.resolve(raw).article_uids)),
                          "law_name_left": bool(got & gold_laws),
                          "law_family_left": bool({w.lawdict.root(x) for x in got} & {w.lawdict.root(x) for x in gold_laws}),
                          "rep_law_articles": sum(1 for a in w.articles.values() if a.law_id == rep_law),
-                         "heldout_law": heldout_law_tag(w, c.answer)}})
+                         "heldout_law": heldout_law_tag(w, current)}})
     return out
 
 
@@ -823,6 +830,10 @@ def print_report(r: dict, held_note: str) -> None:
         print(f"7. {t} 문항(dev + test {len(xs)}) 중 원문에 정답 조문이 읽힘 {sum(x['meta']['answer_in_original'] for x in xs)}, "
               f"가린 문항 {sum(x['meta']['article_masked'] for x in xs)}, 가린 뒤 남은 조문 참조 0(확인 규칙 통과), "
               f"정답 법령명 남음 {sum(x['meta']['law_name_left'] for x in xs)} · 같은 계열 {sum(x['meta']['law_family_left'] for x in xs)}")
+    for t in ("T1", "T3", "T7"):
+        d = Counter((x["split"], x["meta"]["answer_deleted"]) for x in items if x["type"] == t)
+        print(f"7-1. {t} 정답에 현행 삭제 조문: test 일부 {d['test', 'some']} · 전부 {d['test', 'all']}(주 평가 제외), "
+              f"dev 일부 {d['dev', 'some']} · 전부 {d['dev', 'all']}")
     print(f"8. m2_disposition 슬롯 후보에서 조문 표기로 빠진 수(정답 있는 것): {r['m2_disposition_article_ref_dropped']}")
     print(f"9. T2 음성 표집에서 뺀 쌍: {r['t2_neg_dropped']}")
     print(f"10. 숨은 조건으로 버린 T4 슬롯: m2_case(구법 참조 있음, 정답 있는 것) {r['m2_case_hidden_dropped']}; "
