@@ -3,8 +3,11 @@
 AI-INNOVATION-CHALLENGE-2026 `eval/generator_grounding/gg_common.py`(40~124행)의
 sha256 · file_hashes · amendments_entries · append_amendment · prereg_status를 경로만 바꿔 옮겼다.
 
-- lock: 잠금 대상(플랜 부록 4-7) 해시를 `eval/prereg_lock.json`에 한 번만 기록한다. 이미 있으면 거부
-- check: 지금 해시를 잠금 기록과 대조한다. 다르면 AMENDMENTS에 그 해시가 기록됐는지 본다
+- lock: 잠금 대상(플랜 부록 4-7) 해시를 `eval/prereg_lock.json`에 한 번만 기록한다. 이미 있으면 거부.
+  잠그기 전에 자리 표시(`(잠금 전에 채웁니다)`, 상태 줄 설명 밖의 `TBD(D4 dry-run`)와 git 미커밋 변경을 검사하고,
+  잠금 기록에 이 도구(`root/eval/prereg.py`)의 해시 · git HEAD를 함께 남긴다(2026-11-25)
+- check: 파일마다 마지막으로 기록된 해시 하나(AMENDMENTS에 그 파일 기록이 있으면 가장 마지막 것, 없으면 잠금 기록)와
+  대조한다. 잠금 기록에 도구 해시가 있으면 도구도 같은 방식으로 대조한다(2026-11-25, 12단계의 '감사용' 결정을 바꿈)
 - amend: AMENDMENTS.md에 항목을 추가만 한다. 각 항목은 이전 항목(JSON 문자열)의 sha256을 담는다
 
     python eval/prereg.py lock
@@ -17,6 +20,8 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,6 +49,13 @@ LOCK_TARGETS = [
 LOCK_FILE = "eval/prereg_lock.json"
 AMENDMENTS_FILE = "eval/AMENDMENTS.md"
 PLACEHOLDER = "(잠금 전에 채웁니다)"
+# 상태 줄의 `TBD(D4 dry-run …)` 자리는 D4 dry-run · 사용자 검토 뒤 채우고, 남아 있으면 잠그지 않는다(PREREG 상태 줄).
+# 마크다운은 해석하지 않는다. 상태 줄에서 아래 설명 문자열 하나만 빼고 문서 전체를 글자 그대로 찾는다(2026-11-25)
+TBD_MARK = "TBD(D4 dry-run"
+TBD_NOTE = "`TBD(D4 dry-run …)`"
+STATUS_PREFIX = "**상태:"
+# 잠금 도구. lock · check · amend가 모두 root 기준 같은 경로를 해시한다(테스트는 임시 저장소의 사본을 본다, 2026-11-25)
+TOOL_PATH = "eval/prereg.py"
 AMENDMENTS_HEADER = "# AMENDMENTS — 잠금 뒤 기록 (추가만 가능, 각 항목은 이전 항목의 sha256 을 담는다)\n\n"
 
 
@@ -141,31 +153,95 @@ def lock(root: Path = ROOT, targets: list[str] = LOCK_TARGETS) -> dict[str, Any]
     if missing:
         raise SystemExit(f"잠금 대상이 없습니다: {missing}")
     prereg = root / "eval" / "PREREG.md"
-    if prereg.exists() and PLACEHOLDER in prereg.read_text(encoding="utf-8"):
-        raise SystemExit(f"PREREG.md 에 '{PLACEHOLDER}'가 남아 있습니다. 채운 뒤 잠급니다.")
-    data = {"locked_at": datetime.now(timezone.utc).isoformat(), "targets": targets, "files": files}
+    if prereg.exists():
+        text = prereg.read_text(encoding="utf-8")
+        if PLACEHOLDER in text:
+            raise SystemExit(f"PREREG.md 에 '{PLACEHOLDER}'가 남아 있습니다. 채운 뒤 잠급니다.")
+        check_unfilled_tbd(text)
+    tool_file = root / TOOL_PATH
+    if not tool_file.exists():
+        raise SystemExit(f"잠금 도구 {TOOL_PATH}가 없습니다. 잠그지 않습니다.")
+    head, dirty = git_state(root)  # 잠금 파일을 쓰기 전 상태
+    tool = {"path": TOOL_PATH, "sha256": sha256(tool_file), "git_head": head, "git_dirty": dirty}
+    data = {"locked_at": datetime.now(timezone.utc).isoformat(), "targets": targets, "files": files,
+            "tool": tool}
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return data
 
 
+def check_unfilled_tbd(text: str) -> None:
+    """상태 줄(`**상태:`로 시작)이 정확히 하나이고, 그 줄의 설명 문자열 하나를 뺀 문서 전체에 `TBD(D4 dry-run`이 없어야 한다.
+
+    인라인 코드 · 코드 블록도 구분하지 않고 글자 그대로 찾는다. 애매하면 잠그지 않는 쪽이다."""
+    lines = text.splitlines()
+    status = [i for i, line in enumerate(lines) if line.startswith(STATUS_PREFIX)]
+    if len(status) != 1:
+        raise SystemExit(f"PREREG.md 의 상태 줄('{STATUS_PREFIX}'로 시작)이 {len(status)}개입니다. 정확히 하나여야 잠급니다.")
+    lines[status[0]] = lines[status[0]].replace(TBD_NOTE, "", 1)
+    left = [i + 1 for i, line in enumerate(lines) if TBD_MARK in line]
+    if left:
+        raise SystemExit(f"PREREG.md 에 '{TBD_MARK}' 자리가 남아 있습니다(줄 {left}). 채운 뒤 잠급니다.")
+
+
+def _inside_git_tree(root: Path) -> bool:
+    """git 메시지 언어에 기대지 않도록 `.git`(폴더 또는 파일)을 위로 찾아 저장소 여부를 정한다."""
+    r = root.resolve()
+    return any((p / ".git").exists() for p in (r, *r.parents))
+
+
+def _git(git: str, root: Path, *args: str) -> bytes:
+    r = subprocess.run([git, "-C", str(root), *args], capture_output=True)
+    if r.returncode != 0:
+        err = r.stderr.decode("utf-8", "replace").strip()
+        raise SystemExit(f"git {' '.join(args)} 실패({r.returncode}): {err}. 잠그지 않습니다.")
+    return r.stdout
+
+
+def git_state(root: Path) -> tuple[str | None, bool | None]:
+    """(HEAD, dirty). git 실행 파일이 없거나 저장소가 아니면 (None, None). 미커밋 변경이 있거나 git 오류면 거부.
+
+    순서: 실행 파일 → 저장소(`.git` 탐색 뒤 `rev-parse --show-toplevel`) → `status --porcelain=v1 --untracked-files=all -z`.
+    무시 목록(.gitignore)의 파일은 보지 않는다. 그 원천 자료는 스냅숏 manifest(파일별 sha256)로 따로 확인한다."""
+    git = shutil.which("git")
+    if git is None or not _inside_git_tree(root):
+        return None, None
+    _git(git, root, "rev-parse", "--show-toplevel")
+    head = _git(git, root, "rev-parse", "HEAD").decode("utf-8").strip()
+    out = _git(git, root, "status", "--porcelain=v1", "--untracked-files=all", "-z")
+    entries = [e.decode("utf-8", "replace") for e in out.split(b"\0") if e]
+    if entries:
+        shown = "\n".join(entries[:30]) + ("\n…" if len(entries) > 30 else "")
+        raise SystemExit(f"미커밋 변경 {len(entries)}개가 있습니다. 커밋한 뒤 잠급니다.\n{shown}")
+    return head, False
+
+
+UNRECORDED = "기록 없는 변경"
+
+
 def prereg_status(root: Path = ROOT) -> dict[str, Any]:
-    """잠금 대상 해시를 기준과 대조한다. 다르면 AMENDMENTS 에 그 해시가 있는지 본다."""
+    """파일마다 마지막으로 기록된 해시 하나와 대조한다: AMENDMENTS에 그 파일 기록이 있으면 가장 마지막 것, 없으면 잠금 기록.
+
+    기록한 수정을 되돌린 것도 기록 없는 변경이다(2026-11-25). 잠금 기록에 `tool`이 있으면 잠금 도구(`root/eval/prereg.py`)도
+    같은 방식으로 대조한다. 도구가 자기 자신을 검사하므로 의도적 변조가 아니라 기록 누락을 잡는 장치다."""
     path = root / LOCK_FILE
     if not path.exists():
         raise SystemExit(f"{LOCK_FILE} 없음 — lock 을 먼저 한다")
     base = json.loads(path.read_text(encoding="utf-8"))
     now = file_hashes(root, expand(root, base["targets"]))
     amended = {k: v for e in amendments_entries(root) for k, v in e.get("new_hashes", {}).items()}
-    status = {}
-    for k in sorted(set(now) | set(base["files"])):
-        v, b = now.get(k), base["files"].get(k)
-        if v == b:
-            status[k] = "기준과 같음"
-        elif amended.get(k) == v:
-            status[k] = "AMENDMENTS 에 기록된 수정"
-        else:
-            status[k] = "기록 없는 변경(탐색적)"
-    return {"files": now, "status": status, "ok": all(s != "기록 없는 변경(탐색적)" for s in status.values())}
+
+    def judge(k: str, v: str | None, b: str | None, bad: str) -> str:
+        if k in amended:  # 마지막 기록이 기준(잠금 해시로 되돌린 것도 다름)
+            return "AMENDMENTS 에 기록된 수정" if v == amended[k] else bad
+        return "기준과 같음" if v == b else bad
+
+    status = {k: judge(k, now.get(k), base["files"].get(k), f"{UNRECORDED}(탐색적)")
+              for k in sorted(set(now) | set(base["files"]))}
+    if "tool" in base:
+        k = base["tool"]["path"]
+        t = root / k
+        status[k] = judge(k, sha256(t) if t.exists() else None, base["tool"]["sha256"], f"{UNRECORDED}(도구)")
+    return {"files": now, "status": status, "ok": not any(s.startswith(UNRECORDED) for s in status.values())}
 
 
 def main() -> None:

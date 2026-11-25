@@ -58,6 +58,24 @@ def test_disposition_article_mixed_in_violation_line_is_dropped() -> None:
     assert res["violation"] == [f"art:{YAK}:62"] and res["dropped"] == 1
 
 
+def test_added_disposition_articles_listed_and_title_hint() -> None:
+    """2026-11-25 전수 점검으로 더한 처분 · 제재 조문 5개(개별 uid)와, 품질 검사용 제목 단서(정답 판정에는 안 씀)."""
+    added = {"art:004138:33", "art:011794:48-5", "art:002025:44", "art:005668:11", "art:001783:95"}
+    assert added <= D.DISPOSITION_ARTICLES and len(D.DISPOSITION_ARTICLES) == 12
+    for t in ("업무정지 처분을 갈음하여 부과하는 과징금의 산정기준", "의약품등의 적합판정 취소 등", "벌칙", "행정처분의 기준"):
+        assert D.DISPOSITION_TITLE_HINT.search(t), t
+    for t in ("의약품 등 제조소의 시설 기준 등", "임상시험의 실시 기준 등", "화장품 안전기준 등", "의약품 판매"):
+        assert not D.DISPOSITION_TITLE_HINT.search(t), t
+
+
+def test_unlabeled_line_with_listed_and_added_disposition_articles_is_disposition() -> None:
+    """표지 없는 줄에 처분 조문과 새로 더한 처분 조문(벌칙)이 함께 있으면, 줄 전체가 처분 부분이 되어 정답이 비지 않게
+    위반 줄의 조문만 남는다(전에는 목록 밖 조문 때문에 줄이 위반으로 판정돼 그 조문이 정답에 남았다)."""
+    r = Resolver(LD, ARTS | {f"art:{YAK}:95"})
+    res = D.basis_articles("○ 「약사법」 제62조\n○ 「약사법」 제76조, 제95조", r.resolve)
+    assert res["violation"] == [f"art:{YAK}:62"] and f"art:{YAK}:95" in res["disposition"]
+
+
 def test_only_disposition_articles_gives_empty_answer() -> None:
     assert arts("○「약사법」제76조제2항 및 「의약품 등의 안전에 관한 규칙」[별표8] Ⅰ. 일반기준 제11호")["violation"] == []
 

@@ -37,8 +37,8 @@ import grouping as G  # noqa: E402
 import m4_candidates as M4  # noqa: E402
 import prereg  # noqa: E402
 import sources as src  # noqa: E402
-from mfds.disposition import (basis_articles, drug_violation_text, has_mask, read_drug_rows, read_rows,  # noqa: E402
-                              violation_text)
+from mfds.disposition import (DISPOSITION_TITLE_HINT, basis_articles, drug_violation_text, has_mask,  # noqa: E402
+                              read_drug_rows, read_rows, violation_text)
 from mfds.refs import LawDict, Resolver, _key, norm_text  # noqa: E402
 
 # PREREG CONSTANTS와 같아야 한다(시작할 때 대조, 다르면 중단)
@@ -241,7 +241,7 @@ def _select(name: str, cands: list, freq: Counter, total: int, fallback: str = "
     else:
         note = f"상한 유지(올리면 제외 {ratio:.1%} > 30%)"
         nm = G.NEIGHBOR_MAX
-    n_test = min(T1_T3_TEST, (sel.fillable - T1_T3_DEV) // 2)
+    n_test = max(0, min(T1_T3_TEST, sel.fillable - T1_T3_DEV))  # T7과 같은 식(옛 `// 2`는 없앤 460 기준의 흔적, PREREG 4-2)
     return G.select(order, freq, n_test, T1_T3_DEV, neighbor_max=nm), f"{note} + test {n_test}로 축소", over
 
 
@@ -290,6 +290,29 @@ def t1_t3_pools(w: World, disp_ans: dict, crefs: dict) -> tuple[Pool, Pool, Coun
 def drug_answers(w: World) -> dict[str, dict]:
     """의약품 · 화장품 처분 → 근거법령 분할 결과(위반 부분 조문이 정답, 적재기 `BASED_ON`과 같은 정의)."""
     return {s: basis_articles(r.get("BEF_APPLY_LAW"), w.resolver.resolve) for s, r in (w.drug_disp or {}).items()}
+
+
+def title_hint_articles(w: World, basis: dict) -> list[tuple[str, int]]:
+    """품질 검사(PREREG 4-2 T7): 위반 정답에 남은 조문 중 제목이 처분 · 제재 성격으로 보이는 것(`DISPOSITION_TITLE_HINT`)과
+    정답에 든 처분 수. 정답 판정에는 쓰지 않고 보고만 한다. 걸리면 사람이 검토해 `DISPOSITION_ARTICLES`에 더할지 정한다."""
+    n = Counter(a for b in basis.values() for a in set(b["violation"]))
+    return sorted((a, k) for a, k in n.items() if DISPOSITION_TITLE_HINT.search(getattr(w.articles.get(a), "title", None) or ""))
+
+
+MULTI_FAMILY, EMPTY_ANSWER = "여러 계열", "정답 빔"
+
+
+def t7_family_mix(w: World, basis: dict, excluded: set) -> dict[str, Counter]:
+    """제외 · 남은 의약품 · 화장품 처분의 정답 법령 계열 구성(PREREG 4-2 T7 제외 비율, 건수만). 처분 하나는 한 칸에만 센다:
+    위반 정답 조문들의 계열(`LawDict.root`, 시행령 · 시행규칙은 모법 계열)이 하나면 그 모법 이름, 둘 이상이면 "여러 계열",
+    정답이 비면 "정답 빔". 그래서 칸의 합은 처분 수와 같다."""
+    def family(s: str) -> str:
+        roots = {w.lawdict.root(a.split(":")[1]) for a in basis[s]["violation"]}
+        if not roots:
+            return EMPTY_ANSWER
+        return w.lawdict.title.get(next(iter(roots)), "?") if len(roots) == 1 else MULTI_FAMILY
+    return {"제외": Counter(family(s) for s in basis if s in excluded),
+            "남음": Counter(family(s) for s in basis if s not in excluded)}
 
 
 def t7_pool(w: World, basis: dict) -> tuple[Pool, Counter]:
@@ -740,7 +763,9 @@ def build(S: Path, report: dict) -> dict:
                           "dropped_disposition_articles": sum(b["dropped"] for b in basis.values()),
                           "glued_violation_rows": sum(bool(b["glued_violation"]) for b in basis.values()),
                           "glued_disposition_rows": sum(bool(b["glued_disposition"]) for b in basis.values()),
-                          "masked_rows": sum(has_mask(r.get("EXPOSE_CONT")) for r in (w.drug_disp or {}).values())}
+                          "masked_rows": sum(has_mask(r.get("EXPOSE_CONT")) for r in (w.drug_disp or {}).values()),
+                          "title_hint": title_hint_articles(w, basis),
+                          "family_mix": t7_family_mix(w, basis, t7.excluded)}
 
     excl_slots: list[dict] = []
     t2, s2 = t2_items(w, tpl["t2_pair_contraindication"], report, ev["t2_pair_contraindication"]["n"]["dev"])
@@ -851,10 +876,27 @@ def print_report(r: dict, held_note: str) -> None:
     print(f"- T7 근거법령 분할: 처분 {b['rows']:,}, 위반 조문 없음(처분 조문만) {b['empty_violation']}, 해석 실패 {b['unresolved']}, "
           f"위반 줄에서 뺀 처분 조문 {b['dropped_disposition_articles']}, 가림 표시 든 처분 {b['masked_rows']}, "
           f"항 · 호 뒤 붙은 조 표기 위반 쪽 {b['glued_violation_rows']}(원천 제외) · 처분 쪽 {b['glued_disposition_rows']}(정답 무관)")
+    hint = b["title_hint"]
+    print(f"- T7 위반 정답 중 제목이 처분 · 제재 성격으로 보이는 조문(품질 검사, 걸리면 검토해 처분 조문 목록 반영 여부 결정): "
+          f"{len(hint)}" + (" — " + ", ".join(f"{a}({k})" for a, k in hint) if hint else ""))
+    for side, c in b["family_mix"].items():
+        n = sum(c.values())
+        print(f"- T7 {side} 처분 {n}의 정답 법령 계열(처분당 한 칸, 계열 둘 이상은 '{MULTI_FAMILY}'): "
+              + ", ".join(f"{k} {v}({v / n:.0%})" for k, v in sorted(c.items(), key=lambda kv: (-kv[1], kv[0]))))
     for p in (r["t1"], r["t3"], r["t7"]):  # select는 dev-test 충돌만 막는다(PREREG 4-4). 같은 split 안 이어짐은 수치로만 남긴다
         links = {s: sum(G.conflicts(a, b) for i, a in enumerate(xs) for b in xs[i + 1:])
                  for s, xs in (("test", p.sel.test), ("dev", p.sel.dev))}
         print(f"- {p.name} 같은 split 안에서 근접 중복 · 같은 업소로 이어진 문항 쌍: test {links['test']} · dev {links['dev']}")
+
+
+def check_out_empty(d: Path) -> None:
+    """출력 버전 디렉터리는 덮어쓰지 않는다(PREREG 수정 절차 "재생성은 새 버전", 2026-11-25): 파일이 하나라도 있으면 생성 전에 멈춘다.
+
+    `eval/exclusion_ids.json`은 보지 않는다. 재생성 때는 이전 파일을 외장에 백업한 뒤 덮어쓰는 것이 규칙이고,
+    v1 생성 전에는 없는지 절차(검토 문서 7절 14단계)에서 확인한다."""
+    if d.exists() and any(p.is_file() for p in d.rglob("*")):
+        raise SystemExit(f"출력 디렉터리 {d}에 파일이 있다. 재생성은 새 버전 디렉터리(--out eval/evalset/v1-r{{N}})에 "
+                         "쓴다(PREREG 수정 절차)")
 
 
 def check_locked(heldout_mode: str | None) -> None:
@@ -865,8 +907,8 @@ def check_locked(heldout_mode: str | None) -> None:
         raise SystemExit(f"{prereg.LOCK_FILE}이 없다. 사용자 검토 뒤 `python eval/prereg.py lock`을 먼저 한다")
     status = prereg.prereg_status(ROOT)
     if not status["ok"]:
-        bad = [k for k, s in status["status"].items() if s == "기록 없는 변경(탐색적)"]
-        raise SystemExit(f"잠금 대상에 기록 없는 변경이 있다: {bad}")
+        bad = [k for k, s in status["status"].items() if s.startswith(prereg.UNRECORDED)]  # 잠금 대상 · 도구
+        raise SystemExit(f"잠금 대상 · 도구에 기록 없는 변경이 있다: {bad}")
 
 
 def main() -> None:
@@ -887,6 +929,7 @@ def main() -> None:
         raise SystemExit("--compare-out은 저장소 밖 경로여야 한다")
     if not args.dry_run and args.heldout != "write":
         check_locked(args.heldout)
+        check_out_empty(ROOT / args.out)
     report: dict = {}
     out = build(ROOT / args.snapshot, report)
     held_note = heldout_io(args.heldout, INTENTS.read_text(encoding="utf-8"), out["heldout"])

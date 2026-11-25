@@ -8,6 +8,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+import pytest
 from lxml import etree
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "eval"))
@@ -170,6 +171,17 @@ def test_mask_article_refs_keeps_promulgation_numbers_and_words() -> None:
               "동호회 활동", "이 조치에 따라", "등과 같은 조난사고로", "이와 같은 호객행위", ""):
         assert m(s) == s, s
     assert g.has_article_ref("식품위생법 제44조 위반")
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("제44조 제1항 위반", True), ("제44조의2 위반", True), ("제44조제1항제3호", True), ("같은 법 제3조", True),
+    ("동법 시행규칙 제57조", True), ("제4조 및 제5조", True), ("식품위생법 44조 위반", True), ("제1항 위반", True),
+    ("별표 14 위반", True), ("허가번호 제8호", False), ("위생교육 미이수", False),
+])
+def test_has_article_ref_notation_variants(text, expected) -> None:
+    """m2 처분 슬롯 제외 조건(PREREG 4-2, 2026-11-25 회귀 테스트). 조문 가림을 적용하면 문장이 바뀌는가로 정하므로 가림 대상인
+    별표도 참이다(근거 조항 쪽 단서라 M2 첫 단계를 질문이 알려 줌). 단서어 뒤 품목 식별번호는 가리지 않아 거짓."""
+    assert g.has_article_ref(text) is expected
 
 
 def test_mask_article_refs_keeps_product_id_numbers_only_with_cue() -> None:

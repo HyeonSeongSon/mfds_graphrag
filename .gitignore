@@ -18,7 +18,10 @@ unsloth_compiled_cache/
 tools/
 data/bakeoff/
 # evaluation files containing disposition source text (PREREG J7, 2026-11-23): commit hashes and judgments only
-eval/evalset/v1/*.jsonl
-eval/evalset/v1/colloquial/
+# every evalset version dir (v1, v1-r{N}; PREREG J8, 2026-11-24): block all, allow uid-only M4 files and the counts-only data card
+eval/evalset/*/*
+!eval/evalset/*/m4_candidates/
+!eval/evalset/*/m4_resolved_*.json
+!eval/evalset/*/data_card.md
 eval/exclusion_ids.json
 eval/label_audit.csv

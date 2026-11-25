@@ -123,8 +123,28 @@ def test_write_needs_lock_and_heldout_check(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(B.prereg, "prereg_status", lambda root: bad)
     with pytest.raises(SystemExit, match="grouping"):
         B.check_locked("check")
+    bad_tool = {"ok": False, "status": {"eval/prereg.py": "기록 없는 변경(도구)", "eval/sources.py": "기준과 같음"}}
+    monkeypatch.setattr(B.prereg, "prereg_status", lambda root: bad_tool)
+    with pytest.raises(SystemExit, match="eval/prereg.py"):  # 도구 항목도 원인으로 보인다(2026-11-25)
+        B.check_locked("check")
     monkeypatch.setattr(B.prereg, "prereg_status", lambda root: {"ok": True, "status": {}})
     B.check_locked("check")
+
+
+def test_write_refuses_nonempty_out(tmp_path, monkeypatch) -> None:
+    """출력 디렉터리에 파일이 있으면 생성(build) 전에 멈춘다. 없거나 빈 디렉터리는 통과(2026-11-25)."""
+    monkeypatch.setattr(B, "build", lambda S, report: pytest.fail("출력 디렉터리 확인 전에 생성하면 안 된다"))
+    monkeypatch.setattr(B, "check_locked", lambda mode: None)
+    monkeypatch.setattr(B, "ROOT", tmp_path)
+    out = tmp_path / "eval" / "evalset" / "v1"
+    (out / "m4_candidates").mkdir(parents=True)
+    (out / "m4_candidates" / "a.jsonl").write_text("{}\n", encoding="utf-8")  # 하위 디렉터리 파일도 잡는다
+    monkeypatch.setattr(sys, "argv", ["build_evalset.py", "--heldout", "check"])
+    with pytest.raises(SystemExit, match="v1-r"):
+        B.main()
+    B.check_out_empty(tmp_path / "eval" / "evalset" / "v2")  # 없는 디렉터리
+    (tmp_path / "eval" / "evalset" / "v3").mkdir()
+    B.check_out_empty(tmp_path / "eval" / "evalset" / "v3")  # 빈 디렉터리
 
 
 def _world(**kw) -> NS:
@@ -325,6 +345,20 @@ def test_deleted_answer_articles_are_marked_without_reselection(tmp_path, monkey
     assert none_["meta"]["answer_deleted"] == "none" and none_["answer"]["deleted"] == []
 
 
+def test_t7_family_mix_counts_each_disposition_once() -> None:
+    """정답 법령 계열 구성(PREREG 4-2 T7 제외 비율): 시행령은 모법 계열, 계열 둘 이상은 '여러 계열', 정답 빔은 따로, 칸 합 = 처분 수."""
+    ld = NS(root=lambda lid: {"004138": YAK}.get(lid, lid), title={YAK: "약사법", "002015": "화장품법", "002025": "마약류법"})
+    w = NS(lawdict=ld)
+    basis = {"1": {"violation": [f"art:{YAK}:62", "art:004138:33"]},       # 약사법 + 시행령 → 약사법 하나
+             "2": {"violation": ["art:002015:13"]},
+             "3": {"violation": [f"art:{YAK}:62", "art:002025:3"]},        # 두 계열
+             "4": {"violation": []}}
+    mix = B.t7_family_mix(w, basis, {"1", "3"})
+    assert mix["제외"] == Counter({"약사법": 1, B.MULTI_FAMILY: 1})
+    assert mix["남음"] == Counter({"화장품법": 1, B.EMPTY_ANSWER: 1})
+    assert sum(mix["제외"].values()) + sum(mix["남음"].values()) == len(basis)
+
+
 def test_t7_fallback_keeps_neighbor_cap_and_uses_all_fillable(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(B, "T1_T3_TEST", 200)
     monkeypatch.setattr(B, "T1_T3_DEV", 1)
@@ -333,6 +367,22 @@ def test_t7_fallback_keeps_neighbor_cap_and_uses_all_fillable(tmp_path, monkeypa
     t7, _ = B.t7_pool(w, B.drug_answers(w))
     assert "T7 규칙" in t7.fallback and "상한 유지" in t7.fallback
     assert len(t7.sel.test) == t7.sel.fillable - 1  # test = 채울 수 있는 수 − dev(절반이 아님)
+
+
+@pytest.mark.parametrize("total, kept", [(10, "상한 유지"), (1000, "상한 100")])
+def test_t1_t3_fallback_shrinks_test_to_fillable_minus_dev(monkeypatch, total, kept) -> None:
+    """230 미만이면 test = 채울 수 있는 수 − dev(옛 `÷ 2` 아님, PREREG 4-2 2026-11-25). 상한을 못 올릴 때(제외 > 30%)와
+    올려도 모자랄 때 모두 같다."""
+    import grouping as G
+
+    monkeypatch.setattr(B, "T1_T3_TEST", 200)
+    monkeypatch.setattr(B, "T1_T3_DEV", 3)
+    monkeypatch.setattr(B, "T1_T3_REQUIRED", 230)
+    cands = [G.Candidate(key=f"k{i}", members=[f"d{i}"], answer=[f"art:L1:{i + 1}"], excluded={f"d{i}"}) for i in range(10)]
+    freq = Counter(a for c in cands for a in c.answer)
+    sel, note, _ = B._select("t1", cands, freq, total)
+    assert kept in note and sel.fillable == 10
+    assert len(sel.test) == 7 and len(sel.dev) == 3
 
 
 def test_t7_does_not_touch_food_pools_or_t3_freq(tmp_path, monkeypatch) -> None:

@@ -316,7 +316,8 @@ def test_build_graph_matches_schema(graph) -> None:
 
 def test_exclusion_removes_nodes_and_edges(graph, tmp_path: Path) -> None:
     f = tmp_path / "ex.json"
-    f.write_text(json.dumps({"disposition": ["4632752", "disp:food:4627314"], "case": ["618489"], "t2": []}),
+    f.write_text(json.dumps({"disposition": ["4632752", "disp:food:4627314"], "case": ["618489"], "drug_disposition": [],
+                             "t2": []}),
                  encoding="utf-8")
     ex = load_exclusion(f)
     assert ex == {"disp:food:4632752", "disp:food:4627314", "case:618489"}
@@ -325,16 +326,32 @@ def test_exclusion_removes_nodes_and_edges(graph, tmp_path: Path) -> None:
     nodes, edges = g.exclude(ex)
     assert nodes == {"Disposition": 2, "Case": 1} and edges["BASED_ON"] == 2 and edges["REFERENCES"] >= 1
     assert not any(k[1] in ex or k[2] in ex for k in g.edges)
-    for bad in ({"t2": []}, {"disposition": ["4632752"]}):  # 두 키 모두 있어야 한다
-        f.write_text(json.dumps(bad), encoding="utf-8")
-        with pytest.raises(SystemExit):
-            load_exclusion(f)
-    # 의약품 · 화장품 처분은 선택 키 drug_disposition(uid만). 식품 숫자 ID와 섞지 않는다
+    # 의약품 · 화장품 처분은 drug_disposition(uid만). 식품 숫자 ID와 섞지 않는다
     f.write_text(json.dumps({"disposition": ["11"], "case": [], "drug_disposition": ["disp:drug:11"]}), encoding="utf-8")
     assert load_exclusion(f) == {"disp:food:11", "disp:drug:11"}
     f.write_text(json.dumps({"disposition": [], "case": [], "drug_disposition": ["11"]}), encoding="utf-8")
     with pytest.raises(SystemExit, match="disp:drug"):
         load_exclusion(f)
+
+
+@pytest.mark.parametrize("data", [
+    {"case": [], "drug_disposition": []},
+    {"disposition": [], "drug_disposition": []},
+    {"disposition": [], "case": []},
+    {"t2": []},
+])
+def test_exclusion_needs_all_three_source_keys(tmp_path: Path, data: dict) -> None:
+    """세 원천 키 중 하나라도 없으면 멈춘다(키가 빠지면 그 원천이 그래프에 조용히 남음, PREREG 4-4 2026-11-25)."""
+    f = tmp_path / "ex.json"
+    f.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(SystemExit, match="키가 없다"):
+        load_exclusion(f)
+
+
+def test_exclusion_allows_empty_lists(tmp_path: Path) -> None:
+    f = tmp_path / "ex.json"
+    f.write_text(json.dumps({"disposition": [], "case": [], "drug_disposition": []}), encoding="utf-8")
+    assert load_exclusion(f) == set()
 
 
 def test_cli_dry_run_and_eval_needs_exclusion(snap, tmp_path: Path, monkeypatch, capsys) -> None:
@@ -343,14 +360,14 @@ def test_cli_dry_run_and_eval_needs_exclusion(snap, tmp_path: Path, monkeypatch,
     with pytest.raises(SystemExit):
         cli.main()
     ex = tmp_path / "ex.json"
-    ex.write_text(json.dumps({"disposition": ["4632752"], "case": []}), encoding="utf-8")
+    ex.write_text(json.dumps({"disposition": ["4632752"], "case": [], "drug_disposition": []}), encoding="utf-8")
     monkeypatch.setattr(sys, "argv", ["mfds.load", "--snapshot", str(snap), "--mode", "eval", "--exclusion", str(ex),
                                       "--dry-run"])
     cli.main()
     out = capsys.readouterr().out
     assert "Disposition\t4" in out and "dry-run" in out and "no_context" in out
     # 그래프에 없는 ID(형식이 어긋난 사건번호 등)가 있으면 멈춘다
-    ex.write_text(json.dumps({"disposition": ["4632752"], "case": ["2020도1234"]}), encoding="utf-8")
+    ex.write_text(json.dumps({"disposition": ["4632752"], "case": ["2020도1234"], "drug_disposition": []}), encoding="utf-8")
     with pytest.raises(SystemExit, match="그래프에 없다"):
         cli.main()
     # 의약품 처분 uid도 그래프에 있는지 확인한다(고정 스냅숏에는 drugdisp가 없다)
