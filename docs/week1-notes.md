@@ -411,3 +411,35 @@ PC 포맷으로 git 밖 자료(스냅숏 원자료 · 10-28 식품 처분 원본
   - 잠금 대상 27개 파일 중 26개가 git HEAD의 LF 판과 해시가 같다. 다른 1개는 커밋 전인 `build_evalset.py`다.
   - 생성기가 출력하는 산출물 해시(LF 바이트)도 같은 방식의 값이다.
   - dry-run 정상, `pytest` 176 통과 · 16 건너뜀(Docker 꺼짐).
+
+## D5 (2026-11-26): 평가용 그래프 적재 · 누수 검사 · dump · 임베딩 (PLAN 변경 이력 28 ~ 30차)
+
+자세한 명령 · 해시는 PLAN 28 ~ 30차와 `docs/neo4j-dump.md`에 있다. 여기에는 D5 3단계 그래프 통계를 남긴다.
+
+### 그래프 통계 (평가용 그래프, `--mode eval`, 스냅숏 `data/raw/20261105`)
+
+- 적재 52초. 노드 46,975 · 엣지 74,428(DB 건수 = 파싱 건수). 제외: 노드 1,057(Disposition 820 = 식품 564 + 의약품 256, Case 237), 엣지 2,014
+- 누수 0건(그래프 · 벡터 색인 모두), 그래프 천장 · 숨은 조건 불일치 0, dump → 복원 뒤 결과 · 내용 해시 같음
+
+| 노드 | 수 | 엣지 | 수 |
+|---|---|---|---|
+| Item | 13,313 | CITES | 21,645 |
+| Paragraph | 8,918 | HAS_ITEM | 13,313 |
+| AdminArticle | 6,603 | HAS_ARTICLE | 10,348 |
+| Disposition | 5,043 | HAS_PARAGRAPH | 8,918 |
+| Article | 3,745 | BASED_ON | 5,106 |
+| DurRule | 3,091 | INVOLVES | 4,736 |
+| Ingredient | 1,638 | DEFINED_IN | 3,091 |
+| AdminAppeal | 1,523 | DELEGATES_TO | 1,781 |
+| Case | 1,164 | CONTRAINDICATED_WITH | 1,645 |
+| Annex | 1,060 | BASED_ON_LAW | 1,206 |
+| AdminRule | 512 | HAS_ANNEX | 1,060 |
+| Interpretation | 278 | REFERENCES | 943 |
+| Law | 87 | HAS_COMPONENT | 430 |
+| | | CITES_CASE | 150 |
+| | | SUBORDINATE_OF | 56 |
+
+- `REFERENCES`(943)는 아직 정형 필드(`REFERENCES(field)`, D5 1단계)에서 온 것뿐이다. 해석례 · 심판의 API 추출 결과(`REFERENCES` · `INTERPRETS` · `APPLIES`)는 2주차 D2에 더한다.
+- 임베딩 색인: `dragonkue/snowflake-arctic-embed-l-v2.0-ko`, 47,005 × 1024(노드 30,940), sha256 `e94580a90780…`(29차)
+- 백업 1 목록: 4,138파일 · 162.0 MiB, 목록 sha256 `a0e0997767f9…`(30차). 외장 복사는 사용자
+- 남은 D5: 라벨 검수 판정(사용자) → 오류율, 분기는 2주차 D1
