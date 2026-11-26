@@ -475,7 +475,17 @@ def write_audit(path: Path, rows: list[dict]) -> None:
         w.writerows(rows)
 
 
+def check_label(label: str, evalset: Path) -> None:
+    """라벨은 표본 순서 시드에 들어가므로(`audit_order`) 형식(`v1` / `재생성 N`, PREREG 184행)과 평가셋 디렉터리
+    (`v1` / `v1-r{N}`, 413행)가 맞아야 한다. 오타로 다른 표본이 뽑히는 것을 막는다."""
+    from score import label_dir
+    want = label_dir(label)
+    if evalset.parent.name != want:
+        raise SystemExit(f"--label {label!r}은 {want}/ 평가셋에만 쓴다(지금 {evalset.parent.name}/)")
+
+
 def make(args) -> None:
+    check_label(args.label, Path(args.evalset))
     items, b = load_items(Path(args.evalset))
     version = version_label(b, args.label)
     by_id = {x["id"]: x for x in items}
@@ -554,7 +564,7 @@ def main() -> None:
     g.add_argument("--stage", type=int, choices=(1, 2))
     g.add_argument("--extract", action="store_true")
     ap.add_argument("--type", choices=TYPES)
-    ap.add_argument("--label", default="v1", help="생성 버전 이름(v1 / 재생성 N)")
+    ap.add_argument("--label", default="v1", help="생성 버전 이름: v1 또는 '재생성 N'(평가셋 디렉터리 v1 / v1-r{N}과 맞아야 함)")
     ap.add_argument("--evalset", default=str(EVALSET))
     ap.add_argument("--snapshot", default="data/raw/20261105")
     ap.add_argument("--out", default=str(AUDIT))

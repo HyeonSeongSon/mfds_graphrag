@@ -163,7 +163,8 @@ def test_extract_refuses_to_write_on_problems(tmp_path):
 
 def test_stage2_only_after_complete_stage1_with_wrong(tmp_path, monkeypatch):
     items = _items()
-    ev = tmp_path / "test.jsonl"
+    ev = tmp_path / "v1" / "test.jsonl"  # 라벨 v1은 v1/ 평가셋에만(check_label)
+    ev.parent.mkdir()
     ev.write_bytes(b"".join(json.dumps(x, ensure_ascii=False).encode() + b"\n" for x in items))
     version = LA.version_label(ev.read_bytes())
     out = tmp_path / "audit.csv"
@@ -198,3 +199,23 @@ def test_stage2_only_after_complete_stage1_with_wrong(tmp_path, monkeypatch):
     args.stage, args.type = 1, None
     with pytest.raises(SystemExit, match="덮어쓰지"):
         LA.make(args)
+
+
+def test_label_must_match_evalset_dir(tmp_path) -> None:
+    """라벨은 표본 순서 시드에 들어간다: 형식(v1 / 재생성 N)과 디렉터리(v1 / v1-r{N})가 맞아야 한다."""
+    LA.check_label("v1", tmp_path / "v1" / "test.jsonl")
+    LA.check_label("재생성 2", tmp_path / "v1-r2" / "test.jsonl")
+    for label, d in (("v1", "v1-r1"), ("재생성 1", "v1"), ("재생성 1", "v1-r2"), ("v1-r1", "v1-r1"), ("재생성1", "v1-r1")):
+        with pytest.raises(SystemExit):
+            LA.check_label(label, tmp_path / d / "test.jsonl")
+
+
+def test_existing_audit_file_extracts_unchanged() -> None:
+    """지금 쓰는 eval/label_audit.csv(생성 버전 'v1 …')는 바뀐 도구로도 그대로 읽고 대조된다(파일은 쓰지 않음)."""
+    real = LA.AUDIT
+    if not real.exists():
+        pytest.skip("label_audit.csv 없음(git 제외 파일)")
+    rows, _ = LA.read_audit(real)
+    assert rows and {r["생성 버전"].rsplit(None, 1)[0] for r in rows} == {"v1"}
+    r = LA.extract(rows)  # 판정 중이어도 생성 버전 때문에 생기는 문제는 없어야 한다
+    assert not [p for p in r["problems"] if "버전" in str(p)]
