@@ -143,9 +143,11 @@
 
 ### 지출 기록
 
+- **배정(2026-11-26 사용자 충전):** OpenAI 50 · Google 10 · DeepSeek 5 = 65달러. 예비 35달러는 충전 · 배정하지 않음. 예비에서 더 넣으면 아래에 날짜 · 벤더 · 금액 · 사유를 줄로 더한다
+
 | 날짜 | 벤더 | 작업 | 금액(USD) | 누적 |
 |---|---|---|---|---|
-| | | | | |
+| 2026-11-26 | OpenAI · Google · DeepSeek | 키 확인: 벤더마다 짧은 생성 요청 1회(`gpt-6.1-terra` · `gemini-4-argon` thinking low · `deepseek-flash`), 모두 200. DeepSeek 선불 잔액 5.00달러 확인(조회 API) | 0.01 미만 | 0.01 미만 |
 
 ## Citations
 
