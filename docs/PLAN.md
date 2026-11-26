@@ -139,7 +139,7 @@ python -m mfds.collect.law --snapshot data/raw/20261106 && python -m mfds.collec
 | D2 | `schema.yaml`(성분 ID · 정규화 규칙 포함) · `constraints.cypher` · `refs.py` · `ingredients.py` + 테스트, 의도 목록(25~30) · 평가용 정답 Cypher 템플릿 · 평가 문장 템플릿, `prereg.py` 이식 |
 | D3 | 수집기 5종(law · admrul · decisions · foodsafety · dur, 3단비교 · 법령체계도 포함) + 공통 모듈, 전량 수집(키 필요), manifest 건수 대조, 문서 유형별 평균 길이 → API 토큰 추정 · (사용자) 예산 상한 결정. 적재기 초안, 묶음 · 근접 중복 함수, `PREREG.md` 초안 |
 | D4 | `build_evalset.py` 조립 · M4 후보 생성기, **dry-run: 전체 스냅숏을 `--mode full`로 적재해 평가용 템플릿 전부를 실행하고 문항 단위로 원자료 정답과 대조**(고정 자료로는 `m2_disposition`이 반드시 빔, 2026-10-30 확인) → (사용자) 검토 약 1시간 → 잠금 → 밤에 문항 · `exclusion_ids.json` 생성. `docs/finetune-data.md`는 2주차 D4 저녁에 잠금 |
-| D5 | 정형 적재(`exclusion_ids.json`을 읽어 평가 원천 노드 제외), bge-m3 임베딩(CPU, 밤새, 노드 uid별로 디스크 캐시). (사용자) 라벨 검수 T1 · T3 · T7 각 50 |
+| D5 | 정형 적재(`exclusion_ids.json`을 읽어 평가 원천 노드 제외), 임베딩(29차부터 `snowflake-arctic-embed-l-v2.0-ko`, CPU, 밤새, 노드 uid별로 디스크 캐시). (사용자) 라벨 검수 T1 · T3 · T7 각 50 |
 
 완료: 평가용 그래프 1차, PREREG 잠금, 평가셋 생성.
 
@@ -218,7 +218,7 @@ python -m mfds.collect.law --snapshot data/raw/20261106 && python -m mfds.collec
 | 4주차 D1 | 부하 측정 | 약 1시간 |
 | 4주차 D3 | 최종 파이프라인 로컬 실행(test 980(T7 130 포함) + 거절 150, 약 3.5시간) + 구어체 짝 1,130(약 3.8시간) | 약 7.5시간 |
 
-3주차 D5 실행은 D5 밤 안에 끝나도록 잡았다. 4주차 D1 부하 측정과 겹치면 부하 측정을 오후로 미룬다. 임베딩(bge-m3)은 CPU, 벤더 API 실행은 GPU와 병렬로 돌린다.
+3주차 D5 실행은 D5 밤 안에 끝나도록 잡았다. 4주차 D1 부하 측정과 겹치면 부하 측정을 오후로 미룬다. 임베딩(29차부터 snowflake-ko)은 CPU, 벤더 API 실행은 GPU와 병렬로 돌린다.
 
 **벤더 API(토큰 추정):** 1주차 D3에 문서 길이로 추정하고 사용자가 예산 상한을 정한다. 2주차 D1에 표본 100건으로 실제 비용을 재서, 상한을 넘을 것 같으면 추출 입력을 판결요지 우선으로 줄인다.
 | 작업 | 입력 | 출력 |
@@ -352,7 +352,7 @@ python -m mfds.collect.law --snapshot data/raw/20261106 && python -m mfds.collec
 | 4 | **dump · 복원 연습:** 정답 Cypher 결과 해시 계산 → 컨테이너를 멈추고 같은 볼륨을 붙인 별도 컨테이너에서 `neo4j-admin database dump` → `neo4j-admin database load --overwrite-destination` → 기동 → 결과 해시가 dump 전과 같은지 확인. 절차를 문서로 남김(2주차 D4 동결과 4주차 이후 평가용 그래프 복원이 이 절차에 달려 있음) | `docs/neo4j-dump.md` |
 | 5 | 라벨 검수 파일 생성(T1 · T3 · T7 각 50: 문항 · 원천 텍스트 · 자동 정답 · 판정 칸. T7은 근거법령 줄별 라벨 · 판정, 정답 조마다 원문 표기, 항 보조 지표 정답 단위(판정 순서대로 [항] · [조: 항 구조 없음](원문이 항을 적었으면 그 표기를 덧붙임) · [조: 원문이 항 없이 호만] · [조: 원문이 적은 항이 그래프에 없음] · [조: 원문이 조까지만], 순수 · 섞임), 해석 실패 사유, 붙은 조 표기 경고 칸, 정답 조문이 현행 삭제 조문이면 표시하는 칸("⚠ 현행 그래프에서 삭제된 조문"), 처분 목록의 오타 의심 조문 표시(붙은 꼬리 "제N조"를 지우고 다시 읽은 차이로 판정. 표시 전용 재해석이라 `mfds/disposition.py`(잠금 대상)는 고치지 않는다)를 둔다. 11-20 ~ 23 scratch 표본 20건 파일과 같은 표시. **생성 코드는 별도 스크립트 `scripts/label_audit.py`(잠금 목록 밖)**: 표시 칸은 문항 선택에 영향이 없는 출력 형식이고, 잠근 v1 파일을 읽기만 한다. 표본은 PREREG 4-2 규칙(유형별 test 주 평가 문항(`answer_deleted`가 `all`이 아닌 문항)에서 `SEED` 순서 50, T1 가린 문항 10 추가)을 따르고, 파일에 v1 해시와 뽑은 문항 ID를 적어 재현 · 대조할 수 있게 한다. 판정은 이 파일에 입력하고, `--extract`가 원문 없는 판정 · 오류 파일을 뽑으며 판정 칸과 오류 행을 대조한다(칸 · 오류 코드 · 오류율 범위는 PREREG 4-2 판정 기록). `label_audit.csv`는 원문이 있어 git 제외) | `eval/label_audit.csv`(git 제외) · `eval/label_audit_judgments.csv` · `eval/label_audit_errors.csv`(커밋) |
 | 6 | **(사용자) 라벨 검수 약 3.7시간(T1 · T3 · T7)** → 오류율 계산, 분기 판단은 2주차 D1(오류가 나온 유형은 그날 추가 50, 유형당 약 1.2시간) | 오류율 |
-| 7 | 밤: bge-m3 임베딩(CPU, 노드 약 5만, uid + 텍스트 해시로 캐시), 벡터 인덱스 생성 → **벡터 인덱스 누수 검사**(제외 ID 0건, T1 · T3 · T7 `disp:drug:` 포함) | 임베딩 캐시 · 인덱스 |
+| 7 | 밤: 임베딩(CPU, 노드 약 5만, uid + 텍스트 해시로 캐시), 벡터 인덱스 생성 → **벡터 인덱스 누수 검사**(제외 ID 0건, T1 · T3 · T7 `disp:drug:` 포함). 2026-11-26 사용자 결정으로 Neo4j 벡터 인덱스 대신 외부 정확 색인(`scripts/embed_index.py`) · GPU fp32, 모델은 29차에 `dragonkue/snowflake-arctic-embed-l-v2.0-ko`로 교체, 누수 검사는 `check_leak.py --vector`(28차) | 임베딩 캐시 · 인덱스 |
 | 8 | vault: `wiki/dev-tasks/`에 1주차 문서(결정 · 수치 · 남은 일), index · log | vault 문서 |
 
 **완료 확인:** 그래프 · 벡터 인덱스 누수 모두 0건, T6 그래프 천장 기록, dump → 복원 후 해시 일치, 라벨 오류율 산출.
@@ -662,7 +662,7 @@ T4 하위 유형(단순 조회는 제외. T2 · T4 · T6 슬롯은 정답이 비
 
 | 방식 | 동작 |
 |---|---|
-| 벡터 | bge-m3 벡터 인덱스에서 근거 노드 텍스트(조문 · 항, 별표는 1천 자 청크, DurRule 문장)를 질문과 비교해 상위 20. 근거 노드 텍스트는 법령명을 앞에 붙인다: 조문 `[법령명] 제N조(의M)(제목) 본문`, 항 `[법령명] 제N조 제M항 본문`, 별표 청크 `[법령명] 별표 N 제목 · 청크`, 고시 조문 `[고시명] …`, DurRule은 `text` 그대로(질문에 남는 법령명 단서를 그래프와 함께 쓰게 하는 비교 조건, PREREG 4-5) |
+| 벡터 | `dragonkue/snowflake-arctic-embed-l-v2.0-ko` 외부 정확 색인(질의에만 `query: ` 접두어, 29차)에서 근거 노드 텍스트(조문 · 항, 별표는 1천 자 청크, DurRule 문장)를 질문과 비교해 상위 20. 근거 노드 텍스트는 법령명을 앞에 붙인다: 조문 `[법령명] 제N조(의M)(제목) 본문`, 항 `[법령명] 제N조 제M항 본문`, 별표 청크 `[법령명] 별표 N 제목 · 청크`, 고시 조문 `[고시명] …`, DurRule은 `text` 그대로(질문에 남는 법령명 단서를 그래프와 함께 쓰게 하는 비교 조건, PREREG 4-5) |
 | 그래프 | (1) 시작 노드: `refs.py`로 질문 속 법령명 · 조문번호, 성분 사전으로 성분명, 모든 노드 종류(처분 · 판례 · 해석례 포함)에 대한 벡터 상위 10 (2) 종류별 엣지로 1~2홉 확장(`BASED_ON` · `REFERENCES` · `INTERPRETS` · `APPLIES` · `DELEGATES_TO` · `SUBORDINATE_OF` · `CITES` · `CONTRAINDICATED_WITH` · `INVOLVES`) (3) 도달한 근거 노드를 경로 수 · 시작 노드 점수로 순위. **법령명 시작 노드:** `Resolver.resolve()`는 조문 없는 법령명을 내지 않으므로 `Resolver.pattern.finditer(norm_text(질문))`의 `law` 토큰을 공백 뺀 키(`Resolver.by_key`, `_law_token`과 같은 방식)로 법령ID에 맞춰 Law 노드를 잡는다. 그 법령에서 조문 전체로 넓힐지 순위 가중만 줄지는 dev로 정해 `configs/pipeline.yaml`에 넣고, 넓히면 `HAS_ARTICLE` · `HAS_ANNEX`를 확장 엣지에 더한다. 엣지별 확장 방향(정방향 · 역방향 · 양방향, 예: 인용 역추적은 `CITES` 역방향, 위임 추적은 `DELEGATES_TO` 정방향)은 dev로 정해 `configs/pipeline.yaml`에 넣는다 |
 | 하이브리드 | 벡터 목록과 그래프 목록을 RRF(k=60)로 결합 |
 
@@ -1018,4 +1018,17 @@ Streamlit 한 페이지: 질문 → 답변 · 인용 근거(클릭하면 원문)
 - D5 2단계 템플릿 검증: `scripts/check_templates.py --evalset eval/evalset/v1`(D5 모드 추가, T6은 제외 적용 정답 `answer.n`과 비교). 평가용 그래프(노드 46,975)에서 템플릿 오류 0, 없는 성분 uid에서 T2 null. 그래프 천장: 대조 484 슬롯(T2 230 · m1 68 · m2_case 34 · m2_disposition 34 · m3 58 · T6 60) 불일치 0. 숨은 조건 판: m2_case 34 · M4 48 모두 같음(바꾼 슬롯 0). M3 evidence 58 같음
 - M4(Text2Cypher T4): 정답 템플릿 결과가 빈 test 풀 조문 pool_rank 13 · 15 · 22 → 1 ~ 33 중 30개, 34 ~ 36 안 씀. dev 39가 비어 dev 예비 43으로 바꿈(dev 37 · 38 · 43 · 40 · 41 · 42). 부족 0. 정답 파일 `eval/evalset/v1/m4_resolved_t2c.json`(`fa18f4f2af49…`, 두 번 실행해 같음)과 도구 `scripts/check_templates.py`(`4b79006e4d70…`) 해시를 AMENDMENTS #3에 기록, `check` 통과. 선택 규칙 단위 테스트 5개(`tests/test_check_templates.py`). 전체 테스트 298 통과 · 1 건너뜀(Neo4j 기동)
 - D5 4단계 dump · 복원 연습(`docs/neo4j-dump.md`): `scripts/graph_hash.py`(잠금 목록 밖, 정답 템플릿 532 슬롯 결과 해시 + `--content` 노드 · 엣지 전체 내용 해시) 작성. dump 전 결과 해시 `8b91d85d94fc…` · 내용 해시 `46f8ec08b4da…`(두 번 같음) → 컨테이너 멈춤 → 같은 볼륨을 붙인 별도 컨테이너에서 `neo4j-admin database dump`(`neo4j.dump` 145MB, sha256 `e22a3700bc36…`) → `load --overwrite-destination=true` → 기동 → 두 해시와 의도별 해시가 출력 전체로 같음, 제약 조건 13 · 인덱스 20, 누수 검사 통과, 템플릿 대조 불일치 0. 단위 테스트 4개
-- 남은 D5: 라벨 검수 50 × 3, 밤 임베딩 · 벡터 인덱스 누수 검사
+- D5 5단계 라벨 검수 파일: `python scripts/label_audit.py --stage 1` → `eval/label_audit.csv`(git 제외, UTF-8 BOM) 160행(T1 50 + 추가 10 · T3 50 · T7 50), 생성 버전 `v1 2910ce8292b2`. 판정은 사용자
+- D5 7단계 임베딩 설계(2026-11-26 사용자 결정): (1) **벡터는 Neo4j가 아니라 외부 정확 색인**(`data/cache/embed/`, 코사인 전수 비교). Neo4j 벡터 인덱스는 노드 하나에 벡터 하나라 별표 1천 자 청크를 넣으려면 잠긴 `schema.yaml`에 없는 청크 노드를 더해야 하고, HNSW 근사라 재현성이 떨어짐. 그래프 · 결과 해시는 바뀌지 않고 색인은 파일 해시로 동결. 누수 검사는 Cypher 대신 색인 uid 대조 (2) **GPU(RTX 2060) fp32**, `mfds-train` 환경 (3) 모델 `BAAI/bge-m3` 리비전 `5617a9f61b02…` 고정(`pytorch_model.bin` sha256 `b5e0ce3470ab…`, dense = CLS · L2, `max_length` 8192)
+- 임베딩 텍스트: `scripts/embed_texts.py`(PREREG 4-5 규칙, 단위 테스트 6개) → `eval_texts.jsonl` 47,005개(고유 42,538, 두 번 같음 sha256 `65b9f0e9e80e…`). 조문 3,745 · 항 8,918 · 별표 청크 17,083(본문 없는 별표 42 뺌) · 고시 조문 6,603 · DurRule 3,091 · 처분 5,031(빈 위반 문구 12 뺌) · 판례 735(판결요지 · 판시사항 둘 다 없는 429 뺌) · 해석례 278 · 심판 1,521(2 뺌). 호 · 법령 · 고시 · 성분 노드는 넣지 않음
+- `scripts/embed_bge.py`(캐시: 텍스트 sha256 → 벡터, 토큰 예산 묶음) 소량 시험 500개 12초, 잘림 0, 노름 1. `check_leak.py --vector`(색인 · 텍스트 파일 해시, 제외 uid, `--graph`와 함께 색인 uid ⊆ 그래프) 시험 통과
+- D5 7단계 전체 임베딩(GPU fp32, 2,000개마다 캐시 중간 저장): 새로 계산 40,038 + 캐시 2,500, 1,356초, 잘림 0, 노름 1. 색인 `data/cache/embed/eval_index.npy`(47,005 × 1024, sha256 `badea77006f8…`, 텍스트 파일 `65b9f0e9e80e…`). 벡터 색인 누수 검사(`check_leak.py --graph --vector`): 색인 · 텍스트 해시 = 메타, 제외 uid 0 · 0 · 0, 색인 노드 30,940개 모두 그래프에 있음, 그래프 누수 0 · 0 · 0. 남은 처분 5,031 · 판례 735 벡터는 색인에 있어 검사가 비어서 통과한 것이 아님
+- 남은 D5: 라벨 검수 판정(사용자). 색인 해시는 2주차 D4 동결 기록에 넣는다
+
+**29차: 임베딩 모델 교체 bge-m3 → snowflake-arctic-embed-l-v2.0-ko (2026-11-26)**
+
+- 사용자 결정(검색 결과를 하나도 보기 전): 임베딩 모델을 `dragonkue/snowflake-arctic-embed-l-v2.0-ko`(리비전 `55ec6e9358a5…`, `model.safetensors` sha256 `0b874517f0fd…`, Apache-2.0, XLM-RoBERTa · 자체 코드 없음)로 바꾼다. 근거는 공개 한국어 리더보드(OnAnd0n/ko-embedding-leaderboard v2)의 법령 데이터셋 LawIRKo 76.38(bge-m3 70.72, 전체 1위 `pplx-embed-v1-4b` 76.44)과 RTX 2060 6GB에서 원래 모델 그대로 돌아가는지(4B · 3B 후보는 안 들어감). 전체 평균은 82.14(bge-m3 79.30)
+- PREREG에는 모델 이름이 없어 AMENDMENTS 대상이 아니다(잠근 것은 4-5 임베딩 텍스트 규칙). 벡터 기준선과 그래프 시작 노드 검색이 같은 모델을 쓴다. 문서에는 접두어 없음, 질의에만 `query: `(모델 설정 `prompts.query`). CLS · L2, `max_length` 8192, fp32. 한계: 카드상 학습 최대 길이 1,300토큰 — 고유 텍스트 42,538개 중 1,300토큰 초과 176개(0.41%, 중앙값 192)
+- `scripts/embed_bge.py` → `scripts/embed_index.py`(모델 · 리비전 · 가중치 해시 확인 · `QUERY_PREFIX` · `query_text` · 모델별 캐시 폴더 `cache_dir`). 테스트 `tests/test_embed_index.py` 3개. bge-m3 캐시(`bge-m3-5617a9f61b02/`)와 색인(`eval_index_bge-m3.npy`, `badea77006f8…`)은 보관, 동결 대상 아님
+- 전체 임베딩(GPU fp32): 새로 계산 42,038 + 캐시 500(소량 시험), 1,526초, 잘림 0, 노름 1. 색인 `data/cache/embed/eval_index.npy` 47,005 × 1024, sha256 `e94580a90780…`(텍스트 파일 `65b9f0e9e80e…` 그대로). `check_leak.py --graph --vector` 통과: 색인 · 텍스트 해시 = 메타, 제외 uid 0 · 0 · 0, 색인 노드 30,940 모두 그래프에 있음. 전체 테스트 312 통과 · 1 건너뜀
+- 이 색인 해시를 2주차 D4 동결 기록(AMENDMENTS)에 넣는다. 남은 D5: 라벨 검수 판정(사용자)

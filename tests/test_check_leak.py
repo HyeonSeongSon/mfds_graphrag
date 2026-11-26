@@ -53,3 +53,9 @@ def test_graph_check_queries_each_kind() -> None:
     left = L.graph_check(EX, run)
     assert left == {"disp:food:": 0, "disp:drug:": 0, "case:": 0}
     assert ("Disposition", ["disp:food:11", "disp:food:12"]) in seen and ("Case", ["case:21"]) in seen
+
+
+def test_vector_check_counts_excluded_uids() -> None:
+    uids = ["art:1", "disp:food:11", "anx:1:1", "case:99", "disp:drug:2026000001"]
+    assert L.vector_check(EX, uids) == {"disp:food:": 1, "disp:drug:": 1, "case:": 0}
+    assert L.vector_check(EX, ["art:1", "case:99"]) == {"disp:food:": 0, "disp:drug:": 0, "case:": 0}
