@@ -1032,3 +1032,8 @@ Streamlit 한 페이지: 질문 → 답변 · 인용 근거(클릭하면 원문)
 - `scripts/embed_bge.py` → `scripts/embed_index.py`(모델 · 리비전 · 가중치 해시 확인 · `QUERY_PREFIX` · `query_text` · 모델별 캐시 폴더 `cache_dir`). 테스트 `tests/test_embed_index.py` 3개. bge-m3 캐시(`bge-m3-5617a9f61b02/`)와 색인(`eval_index_bge-m3.npy`, `badea77006f8…`)은 보관, 동결 대상 아님
 - 전체 임베딩(GPU fp32): 새로 계산 42,038 + 캐시 500(소량 시험), 1,526초, 잘림 0, 노름 1. 색인 `data/cache/embed/eval_index.npy` 47,005 × 1024, sha256 `e94580a90780…`(텍스트 파일 `65b9f0e9e80e…` 그대로). `check_leak.py --graph --vector` 통과: 색인 · 텍스트 해시 = 메타, 제외 uid 0 · 0 · 0, 색인 노드 30,940 모두 그래프에 있음. 전체 테스트 312 통과 · 1 건너뜀
 - 이 색인 해시를 2주차 D4 동결 기록(AMENDMENTS)에 넣는다. 남은 D5: 라벨 검수 판정(사용자)
+
+**30차: 백업 1 목록 (2026-11-26)**
+
+- 백업 1(11-24 밤 잠금 직후 예정)이 기록 없이 밀려 있었다. `scripts/backup_manifest.py`(잠금 목록 밖, 테스트 3개) 작성: `make <번호>`는 대상 파일의 sha256 목록을 `data/backups/backup<번호>.sha256`(git 제외, `sha256sum` 형식)에 쓰고, `verify <번호> <백업 폴더>`는 복사한 곳에서 다시 계산해 같음 · 다름 · 없음을 센다. 백업 2 ~ 5 대상은 그 시점에 `SETS`에 더한다
+- 백업 1 대상: 스냅숏 `data/raw/20261105` · `20261029`, `data/raw/manual`, `eval/evalset/v1`, `eval/exclusion_ids.json`, `eval/label_audit.csv`(판정 중 사본). 파일 4,138 · 162.0 MiB, 목록 sha256 `a0e0997767f9…`, 저장소 자리에서 대조 통과. 외장 · 클라우드 복사와 대조는 사용자(`.env`는 넣지 않음)

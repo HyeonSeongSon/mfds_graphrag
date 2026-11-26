@@ -6,6 +6,7 @@ data/raw/*/*
 data/neo4j/
 data/cache/
 data/dumps/
+data/backups/
 models/
 *.gguf
 *.safetensors
