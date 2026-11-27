@@ -211,7 +211,8 @@ def test_partial_overlap_keeps_the_earlier_span(ctx):
 
 
 def test_historical_is_refs_only_and_inference_is_recorded(ctx):
-    """PREREG 274행: refs.py가 표시한 구법만 historical(적재 · 확장 제외 조건). refs.py 밖 추정은 historical_inferred(기록만)."""
+    """historical에는 refs.py가 표시한 구법만(PREREG 274행), refs.py 밖 추정은 historical_inferred로 따로 낸다.
+    추출 엣지 적재 때 둘을 합쳐 쓰는 것(AMENDMENTS 4 근거 (1) · (3))은 적재기 몫이라 여기서는 분리만 본다."""
     old = "구 식품위생법(2013. 3. 23. 법률 제11690호로 개정되기 전의 것, 이하 '법'이라 한다) 제36조"
     t = old + ", 같은 법 제75조에 따라 처분한다. 법 제37조를 위반하였고 제38조도 위반하였다. 약사법 제5조"
     res = E.resolve_doc(ctx, t, [item(old, "식품위생법"), item("같은 법 제75조", "식품위생법"),

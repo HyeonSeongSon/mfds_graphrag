@@ -81,17 +81,24 @@ edges:
   BASED_ON_LAW:  {from: AdminRule, to: [Article, Paragraph], when: "1주차 D5", how: "고시 본문의 근거 조항 + refs.py"}
   BASED_ON:      {from: Disposition, to: [Article, Paragraph], when: "1주차 D5", how: "food: LAWORD_CD_NM + refs.py / drug: BEF_APPLY_LAW의 위반 부분 조문만(mfds.disposition.basis_articles, 처분 조문 · 별표 제외) + refs.py"}
   REFERENCES:    {from: [Case, Interpretation, AdminAppeal], to: [Article, Paragraph], props: [source, historical],
-                  when: "1주차 D5(source=field) · 2주차 D2(source=extracted, 필드 없는 문서만)", how: "참조조문 필드 + refs.py / API 추출 + refs.py"}
+                  when: "1주차 D5(source=field) · 2주차 D2(source=extracted, 필드 없는 문서만 / source=regex, 판정 C가 정규식일 때 필드 없는 판례만)",
+                  how: "참조조문 필드 + refs.py / API 추출 + refs.py / 추출 입력 본문 + refs.py"}
   CITES_CASE:    {from: Case, to: Case, when: "1주차 D5", how: "참조판례 필드"}
-  INTERPRETS:    {from: Interpretation, to: [Article, Paragraph], when: "2주차 D2", how: "API 추출"}
-  APPLIES:       {from: AdminAppeal, to: [Article, Paragraph], when: "2주차 D2", how: "API 추출"}
+  INTERPRETS:    {from: Interpretation, to: [Article, Paragraph], props: [historical], when: "2주차 D2", how: "API 추출"}
+  APPLIES:       {from: AdminAppeal, to: [Article, Paragraph], props: [historical], when: "2주차 D2", how: "API 추출"}
   INVOLVES:      {from: DurRule, to: Ingredient, when: "1주차 D5", how: "병용금기 고시 별표 1~3"}
   CONTRAINDICATED_WITH: {from: Ingredient, to: Ingredient, props: [rule_id], when: "1주차 D5", how: "별표 1 행마다 한 방향(name_a → name_b, 정렬 순)"}
   DEFINED_IN:    {from: DurRule, to: Annex, when: "1주차 D5", how: "병용금기 고시 별표"}
   HAS_COMPONENT: {from: Ingredient, to: Ingredient, when: "1주차 D5", how: "복합제 표기 'A + B'"}
 
-# historical: refs.py가 구법 참조(`구 X법(… 개정되기 전의 것) 제N조`)로 표시한 엣지. 적재는 하되 그래프 확장 ·
-#             정답 Cypher 템플릿에서 뺀다(전부개정으로 번호가 바뀌었으면 현행 같은 번호 조문이 엉뚱한 조문이다)
+# historical: 구법 참조 엣지. 적재는 하되 그래프 확장 · 정답 Cypher 템플릿에서 뺀다(전부개정으로 번호가 바뀌었으면
+#             현행 같은 번호 조문이 엉뚱한 조문이다). 엣지 종류마다 근거가 다르다
+#             (docs/schema.md "구법 참조" · "추출 엣지의 구법 표시" 두 문단)
+#   - REFERENCES field · CITES: refs.py 표시(`구 X법(… 개정되기 전의 것) 제N조`)만
+#   - REFERENCES extracted · INTERPRETS · APPLIES: AMENDMENTS 4의 근거 (1)~(4) 중 하나
+#   - REFERENCES regex(판정 C가 정규식일 때만): 근거 (1) · (4)만(AMENDMENTS 5)
+#   - 같은 문서에서 같은 대상으로 가는 엣지에 인용이 여럿이면 모두 참일 때만 참(mfds/load/graph.py).
+#     regex는 refs.py가 같은 uid의 첫 인용만 남기므로 그 uid는 첫 인용의 표시를 따른다
 
 # Text2Cypher 프롬프트의 스키마 요약에 반드시 넣는 조회 속성. 평가 문항의 슬롯 라벨은 이 속성으로 찾을 수 있어야 한다
 text2cypher_lookup:

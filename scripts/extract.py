@@ -346,9 +346,9 @@ OLD_MARK = re.compile(r"구\s?「?$")
 
 def old_before(ctx: Ctx, text: str, pos: int, law_id: str, lo: int = 0) -> bool:
     """pos 앞(lo부터)에서 마지막으로 나온 그 법령 가족 이름 앞에 "구"가 붙었는지. refs.py는 "구 X법(…) 제36조" 뒤의
-    "같은 법 · 맨 제N조"에 구법 표시를 넘기지 않는다. 이 추정은 `historical_inferred`로 **기록만** 한다(PREREG 274행은
-    refs.py가 표시한 것만 그래프 확장 · 정답 템플릿에서 빼라고 정함. 표본 17건 중 오탐 있음: "구 식품위생법 시행규칙" 뒤
-    "법 제36조")."""
+    "같은 법 · 맨 제N조"에 구법 표시를 넘기지 않는다. 이 추정은 `historical_inferred`로 따로 내고, 적재 때 추출 엣지의
+    구법 근거 (3)으로 쓴다(AMENDMENTS 4, docs/schema.md "추출 엣지의 구법 표시"). `historical`에는 refs.py 표시만 담는다.
+    표본 14조문을 문맥으로 확인했고 오탐은 확인되지 않았다(PLAN 32차 (6))."""
     rx = ctx.family_rx.get(ctx.laws.root(law_id))
     if rx is None:
         return False
@@ -393,7 +393,7 @@ def resolve_item(ctx: Ctx, text: str, item: dict, use_law: bool = True,
 
     def add(res, hist: bool = False, inferred: bool = False) -> None:
         """historical: refs.py가 표시한 구법(해석 결과의 표시 또는 hist=센티넬 결과의 표시) — 적재 때 엣지 historical.
-        historical_inferred: refs.py 밖 추정(기록만, 적재 조건에 쓰지 않음)."""
+        historical_inferred: refs.py 밖 추정 — 적재 때 근거 (3)(AMENDMENTS 4). 적재기가 historical과 합친다."""
         for ref in res.refs:
             if ref.uid not in out["refs"]:
                 out["refs"].append(ref.uid)
@@ -404,7 +404,7 @@ def resolve_item(ctx: Ctx, text: str, item: dict, use_law: bool = True,
                 notes["구법 표시(refs.py)"] += 1
             elif inferred and not (ref.historical or hist) and ref.article_uid not in out["historical_inferred"]:
                 out["historical_inferred"].append(ref.article_uid)
-                notes["구법 추정(기록만)"] += 1
+                notes["구법 추정"] += 1
 
     if SAME.match(t):
         out["path"] = "같은 조(풀지 않음)"
