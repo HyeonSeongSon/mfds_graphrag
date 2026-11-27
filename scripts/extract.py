@@ -40,7 +40,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from mfds.load.build import load_exclusion  # noqa: E402
-from mfds.refs import LawDict, Resolver, article_set, norm_text  # noqa: E402
+from mfds.refs import DOTS, LawDict, Resolver, article_set, norm_text  # noqa: E402
 
 SNAPSHOT = ROOT / "data" / "raw" / "20261105"
 EXCLUSION = ROOT / "eval" / "exclusion_ids.json"
@@ -644,14 +644,21 @@ def check(records: list[dict], docs: dict[str, dict], expected: set[str], n_tota
             for x in res:
                 for a in x["article_uids"]:
                     if a not in regex_arts:
-                        d1["llm_only"].append((doc["uid"], a, x["path"], x["text"], x["span"]))
-            raw_of = {}
-            for ref in regex.refs:
-                raw_of.setdefault(ref.article_uid, ref.raw)
+                        d1["llm_only"].append((doc["uid"], a, x["path"], x["text"], x["span"], ""))
+            first_raw = {}
+            for ref in regex.refs:  # refs.py는 앞에서 뒤로 읽으며 내고 같은 조문은 한 번만 낸다 → 첫 ref가 처음 낸 자리
+                first_raw.setdefault(ref.article_uid, ref.raw)
+            item_spans = [(s, e, it["text"], x["article_uids"]) for it, x in zip(items, res)
+                          for s, e in find_spans(doc["text"], it["text"], is_short(it["text"]))[0]]
             for a in sorted(regex_arts - llm_arts):
-                raw = raw_of.get(a, "")
-                i = doc["text"].find(raw) if raw else -1
-                d1["regex_only"].append((doc["uid"], a, "정규식", raw, (i, i + len(raw)) if i >= 0 else None))
+                raw = first_raw.get(a, "")
+                spot, n_occ = regex_spot(ctx, doc["text"], a, raw)
+                same = same_spot(ctx, item_spans, spot) if spot else f"자리 못 정함(표기 {n_occ}곳, 첫 자리 표시)"
+                if spot is None:
+                    st["D1 정규식 자리 못 정함"] += 1
+                    i = doc["text"].find(raw) if raw else -1
+                    spot = (i, i + len(raw)) if i >= 0 else None
+                d1["regex_only"].append((doc["uid"], a, "정규식", raw, spot, same))
         resolved_docs.append({"uid": doc["uid"], "kind": doc["kind"], "config": rec.get("config"),
                               "model": ((rec.get("response") or {}).get("body") or {}).get("model"),
                               "items": [{k: v for k, v in x.items() if k not in ("notes",)} for x in res]})
@@ -696,12 +703,60 @@ def check(records: list[dict], docs: dict[str, dict], expected: set[str], n_tota
     return rep, resolved_docs, d1
 
 
-def review_rows(d1: dict, docs: dict[str, dict], per_side: int = REVIEW_PER_SIDE, spare: int = 5) -> list[dict]:
+def regex_spot(ctx: Ctx, text: str, art: str, raw: str) -> tuple[tuple[int, int] | None, int]:
+    """정규식이 그 조문을 처음 낸 자리: 원문 표기(첫 ref의 raw)가 나오는 위치마다 시작 직전까지 · 끝까지 잘라 해석해,
+    그 조문이 없다가 생기는 위치. refs.py가 앞에서 뒤로만 읽는다는 가정(테스트로 고정). → (자리 또는 None, 표기 수)."""
+    if not raw:
+        return None, 0
+    hay = text.translate(DOTS).replace("\n", " ")  # refs.norm_text와 같은 길이로 맞춤(가운뎃점 · 필드 사이 줄바꿈)
+    occ = [m.start() for m in re.finditer(re.escape(raw), hay)]
+    for i in occ:
+        if art not in ctx.r.resolve(text[:i]).article_uids and art in ctx.r.resolve(text[:i + len(raw)]).article_uids:
+            return (i, i + len(raw)), len(occ)
+    return None, len(occ)
+
+
+def same_spot(ctx: Ctx, item_spans: list, spot: tuple[int, int]) -> str:
+    """정규식 자리에 겹친 LLM 항목 중 가장 긴 것 하나와 그 해석(나머지는 "외 n개"). 없으면 "없음"."""
+    a, b = spot
+    hit = sorted({(s, e, tx, tuple(arts)) for s, e, tx, arts in item_spans if s < b and a < e},
+                 key=lambda h: (-(h[1] - h[0]), h[0]))
+    if not hit:
+        return "없음"
+    s, e, tx, arts = hit[0]
+    got = ", ".join(f"{ctx.laws.title.get(u.split(':')[1], '')} 제{u.split(':')[2]}조"
+                    for u in arts if u.startswith("art:")) or "해석 안 됨"
+    return f"{tx} → {got}" + (f" 외 {len(hit) - 1}개" if len(hit) > 1 else "")
+
+
+def _squash(x: str) -> str:
+    return re.sub(r"\s|⏎", "", x)
+
+
+def anchor_key(before: str, cite: str, after: str) -> str:
+    """같은 자리 키: 공백을 지운 앞 30자 + 인용 + 뒤 15자(문서 간 판박이 문장 거르기 · B와 D1 같은 자리 짝짓기)."""
+    return _squash(before)[-30:] + "|" + _squash(cite) + "|" + _squash(after)[:15]
+
+
+def anchor_from_context(c: str, cite: str) -> str | None:
+    """확인 파일 문맥 칸에서 자리 키를 다시 만든다. 【】 쌍 가운데 내용이 인용과 같은 것(공백 무시)."""
+    want = _squash(cite)
+    for m in re.finditer(r"【([^【】]*)】", c):
+        if _squash(m.group(1)) == want:
+            return anchor_key(c[:m.start()], m.group(1), c[m.end():])
+    return None
+
+
+def review_rows(d1: dict, docs: dict[str, dict], per_side: int = REVIEW_PER_SIDE, spare: int = 5,
+                skipped: Counter | None = None, ctx: Ctx | None = None) -> list[dict]:
     """D1 사람 확인 묶음(시드 순서): LLM만 낸 조문 · 정규식만 낸 조문 각 per_side + 예비 spare. 조문(art:)만 — 별표(anx:)는
     REFERENCES 엣지가 되지 않으므로 뺀다(2026-11-27, 판정 전). 보류가 나오면 같은 묶음의 예비를 위에서부터 같은 수만큼
-    판정해 수를 채운다(예비가 모자라면 있는 만큼). 문맥은 앞 150자 · 뒤 60자."""
-    ctx = snapshot_ctx()
+    판정해 수를 채운다(예비가 모자라면 있는 만큼). 문서 간 판박이 문장(같은 자리 키)은 건너뛴다. 문맥은 앞 250자 · 뒤 60자.
+    "구분" 칸(정규식만 냄 행만): 제외 위반 · 정규식도 틀림 · 제외 위반+정규식도 틀림 · 빈칸. B와 겹치는지는 표시하지 않는다."""
+    ctx = ctx or snapshot_ctx()
     rows = []
+    skipped = skipped if skipped is not None else Counter()
+    keys: dict[str, str] = {}  # 자리 키 → 그 자리를 먼저 뽑은 묶음. 두 묶음에 걸쳐 같은 자리는 한 번만(LLM만 냄을 먼저 뽑음)
     for side, label, values in (("llm_only", "LLM만 냄", "맞음 · 틀림 · 보류"), ("regex_only", "정규식만 냄", "놓침 · 의도된 제외 · 정규식 틀림 · 보류")):
         cands = sorted({c for c in d1[side] if c[1].startswith("art:")}, key=lambda x: (x[0], x[1], x[3]))
         random.Random(f"{SEED}:extract_d1:{side}").shuffle(cands)
@@ -709,11 +764,18 @@ def review_rows(d1: dict, docs: dict[str, dict], per_side: int = REVIEW_PER_SIDE
         for c in cands:
             if (c[0], c[1]) in seen:
                 continue
+            if c[4]:
+                t, (a, b) = docs[c[0]]["text"], c[4]
+                key = anchor_key(t[max(0, a - 150):a], t[a:b], t[b:b + 60])
+                if key in keys:  # 문서 간 판박이 문장, 또는 다른 묶음에서 이미 뽑은 같은 자리
+                    skipped[f"{label}: " + ("같은 묶음 판박이" if keys[key] == label else f"{keys[key]}과 같은 자리")] += 1
+                    continue
+                keys[key] = label
             seen.add((c[0], c[1]))
             picked.append(c)
             if len(picked) == per_side + spare:
                 break
-        for k, (uid, art, path, text, span) in enumerate(picked):
+        for k, (uid, art, path, text, span, same) in enumerate(picked):
             t = docs[uid]["text"]
             if span is None:  # 자리를 못 찾으면 그 조문 번호가 처음 나온 자리
                 num = art.split(":")[2].partition("-")[0]
@@ -722,8 +784,10 @@ def review_rows(d1: dict, docs: dict[str, dict], per_side: int = REVIEW_PER_SIDE
             a, b = span
             law = ctx.laws.title.get(art.split(":")[1], "")
             rows.append({"순서": "본" if k < per_side else "예비", "묶음": label, "고를 값": values, "문서": uid,
-                         "조문": art, "법령": law, "경로": path, "인용": text,
-                         "문맥": context(t, a, b, 150, 60), "판정": "", "표시(본문 · 구법 · 본문+구법)": "", "메모": ""})
+                         "조문": art, "법령": law, "경로": path, "인용": t[a:b] if side == "regex_only" else text,
+                         "같은 자리 LLM 결과": same, "문맥": context(t, a, b, 250, 60), "판정": "",
+                         "표시(본문 · 구법 · 본문+구법)": "",
+                         "구분(제외 위반 · 정규식도 틀림 · 제외 위반+정규식도 틀림)": "", "메모": ""})
     return rows
 
 
@@ -791,6 +855,8 @@ def write_review(path: Path, rows: list[dict]) -> None:
 VALUES = {"B": {"맞음", "틀림", "보류"}, "LLM만 냄": {"맞음", "틀림", "보류"},
           "정규식만 냄": {"놓침", "의도된 제외", "정규식 틀림", "보류"}}
 MARKS = {"", "본문", "구법", "본문+구법"}
+GUBUN_COL = "구분(제외 위반 · 정규식도 틀림 · 제외 위반+정규식도 틀림)"
+GUBUN = {"", "제외 위반", "정규식도 틀림", "제외 위반+정규식도 틀림"}
 B_N, B_PASS, D1_N, D1_RATE = 30, 24, REVIEW_PER_SIDE, 0.80
 
 
@@ -812,6 +878,13 @@ def fill(rows: list[dict], n: int, kind: str) -> dict:
             raise SystemExit(f"{kind}: 표시 값 {m!r}은 본문 · 구법 · 본문+구법 중 하나여야 한다({r['문서']})")
         if v == "보류" and "구법" not in m:
             raise SystemExit(f"{kind}: 보류는 구법 확인 불가일 때만(표시에 구법 필요, {r['문서']})")
+        g = (r.get(GUBUN_COL) or "").strip()
+        if g not in GUBUN:
+            raise SystemExit(f"{kind}: 구분 값 {g!r}은 제외 위반 · 정규식도 틀림 · 제외 위반+정규식도 틀림 중 하나여야 한다({r['문서']})")
+        if g and kind != "정규식만 냄":
+            raise SystemExit(f"{kind}: 구분은 정규식만 냄 행에만 쓴다({r['문서']})")
+        if g and v != "놓침":
+            raise SystemExit(f"{kind}: 구분이 있는 행은 판정이 놓침이어야 한다({r['문서']})")
         return v
 
     judged, holds, need = [], 0, 0
@@ -859,11 +932,34 @@ def tally_d1(rows: list[dict]) -> dict:
             "결과(B가 사용일 때)": "LLM 결과" if r_all is not None and r_all >= D1_RATE else "정규식 결과",
             "본문 뺀 값(기록)": {"LLM 맞음": good2, "판정 수": n2, "비율": r_free},
             **{f"{k} 보류 · 판정한 예비 · 모자람": (s["holds"], s["used_spare"], s["shortfall"]) for k, s in sides.items()},
-            "정규식 틀림": sum(r["판정"].strip() == "정규식 틀림" for r in every)}
+            "정규식 틀림": sum(r["판정"].strip() == "정규식 틀림" for r in every),
+            "정규식 오류 수(정규식 틀림 + 구분 정규식도 틀림)": sum(
+                r["판정"].strip() == "정규식 틀림" or "정규식도 틀림" in (r.get(GUBUN_COL) or "") for r in every),
+            "제외 위반": sum("제외 위반" in (r.get(GUBUN_COL) or "") for r in every)}
 
 
-EXPORT_COLS = ["순서", "묶음", "문서", "인용", "모델 law", "해석 법령", "법령", "조문", "경로", "판정",
-               "표시(본문 · 구법 · 본문+구법)", "메모"]
+def dual_agreement(b_rows: list[dict], d_rows: list[dict]) -> dict:
+    """B와 D1에서 같은 자리 · 같은 조문을 둘 다 사람이 판정한 행의 일치(기록만, D1 LLM만 냄 행만)."""
+    b_by = {}
+    for r in b_rows:
+        if (r.get("판정") or "").strip():
+            k = anchor_from_context(r["문맥"], r["인용"])
+            for art in r["조문"].split():
+                if k:
+                    b_by[(r["문서"], k, art)] = r["판정"].strip()
+    n = same = 0
+    for r in d_rows:
+        if r.get("묶음") != "LLM만 냄" or not (r.get("판정") or "").strip():
+            continue
+        k = anchor_from_context(r["문맥"], r["인용"])
+        v = b_by.get((r["문서"], k, r["조문"])) if k else None
+        if v is not None:
+            n, same = n + 1, same + (v == r["판정"].strip())
+    return {"둘 다 판정한 같은 자리": n, "일치": same, "일치율": round(same / n, 3) if n else None}
+
+
+EXPORT_COLS = ["순서", "묶음", "문서", "인용", "모델 law", "해석 법령", "법령", "조문", "경로", "같은 자리 LLM 결과",
+               "판정", "표시(본문 · 구법 · 본문+구법)", "구분(제외 위반 · 정규식도 틀림 · 제외 위반+정규식도 틀림)", "메모"]
 
 
 def export_judgments(rows: list[dict], path: Path) -> str:
@@ -885,10 +981,12 @@ def report(records: list[dict], docs: list[dict], expected: set[str], resolved: 
         write_jsonl(resolved, res)
         rep["해석 결과 파일"] = f"{resolved.name} sha256 {sha256(resolved)[:12]}"
     if review:
-        rows = review_rows(d1, by)
+        skipped = Counter()
+        rows = review_rows(d1, by, skipped=skipped)
         write_review(review, rows)
         rep["D1 확인 파일"] = f"{review.name}: " + ", ".join(
             f"{k} {v}" for k, v in Counter(r["묶음"] for r in rows).items())
+        rep["D1 판박이 문장 건너뜀"] = dict(skipped)
         rate = rep["B"]["일치율"]
         if rate is not None and 0.90 <= rate < 0.95:  # PLAN B1 판정 B: 90~95%면 사람 확인 30건
             b_path = review.with_name("b_review.csv")
@@ -938,14 +1036,27 @@ def cmd_review_tally(a: argparse.Namespace) -> None:
     out = {}
     b_path, d_path = OUT / "b_review.csv", OUT / "d1_review.csv"
     dest = ROOT / "eval" / "extract_review"
-    if b_path.exists():
-        rows = read_review(b_path)
-        out["B"] = tally_b(rows)
-        out["B 내보냄"] = f"b_judgments.csv sha256 {export_judgments(rows, dest / 'b_judgments.csv')[:12]}"
-    rows = read_review(d_path)
-    out["D1"] = tally_d1(rows)
-    out["D1 내보냄"] = f"d1_judgments.csv sha256 {export_judgments(rows, dest / 'd1_judgments.csv')[:12]}"
+    b_rows = read_review(b_path) if b_path.exists() else []
+    if b_rows:
+        out["B"] = tally_b(b_rows)
+        out["B 내보냄"] = f"b_judgments.csv sha256 {export_judgments(b_rows, dest / 'b_judgments.csv')[:12]}"
+    else:
+        out["B"] = "사람 확인 파일 없음: B 최종 결정은 표본 센티넬 일치율(95% 이상 사용 · 90% 미만 끔)"
+    d_rows = read_review(d_path)
+    if d1_skipped(out["B"], d_rows):
+        out["D1"] = "생략: B 최종 결정이 끔(해석례 · 심판 REFERENCES는 정규식 결과). D1 빈 파일과 해시는 그대로 둔다"
+    else:
+        out["D1"] = tally_d1(d_rows)
+        out["D1 내보냄"] = f"d1_judgments.csv sha256 {export_judgments(d_rows, dest / 'd1_judgments.csv')[:12]}"
+        if b_rows:
+            out["B · D1 같은 자리 이중 판정(기록만)"] = dual_agreement(b_rows, d_rows)
     print(json.dumps(out, ensure_ascii=False, indent=1))
+
+
+def d1_skipped(b: dict | str, d_rows: list[dict]) -> bool:
+    """B 최종 결정이 끔이고 D1에 판정이 하나도 없으면 D1을 생략한다(PLAN B1: D1은 B가 사용일 때만 결정에 영향)."""
+    off = isinstance(b, dict) and b.get("결과") == "끔"
+    return off and not any((r.get("판정") or "").strip() for r in d_rows)
 
 
 def cmd_check(a: argparse.Namespace) -> None:

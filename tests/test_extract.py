@@ -1,5 +1,6 @@
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -317,6 +318,104 @@ def test_d1_tally_counts_regex_wrong_and_reports_body_free_value():
     t = E.tally_d1(llm + rgx)
     assert (t["LLM 맞음"], t["판정 수"], t["비율"]) == (14, 20, 0.7) and t["결과(B가 사용일 때)"] == "정규식 결과"
     assert t["본문 뺀 값(기록)"] == {"LLM 맞음": 9, "판정 수": 15, "비율": 0.6} and t["정규식 틀림"] == 2
+
+
+# ---- D1 최종안(2026-11-27): 처음 낸 자리 · 같은 자리 · 판박이 키 · 구분 · 이중 판정 · 생략 ----
+
+def test_regex_spot_is_where_regex_first_emits(ctx):
+    t = "약사법 제5조 위반. 식품위생법 제44조 및 제5조를 위반하였고, 식품위생법 제44조"
+    spot, n = E.regex_spot(ctx, t, f"art:{FOOD}:5", "제5조")  # 첫 "제5조"는 약사법 자리라 건너뜀
+    assert n == 2 and spot == (t.rfind("제5조"), t.rfind("제5조") + 3)
+    spot, n = E.regex_spot(ctx, t, f"art:{FOOD}:44", "식품위생법 제44조")  # 반복 인용은 처음 낸 자리
+    assert n == 2 and spot == (t.find("식품위생법 제44조"), t.find("식품위생법 제44조") + len("식품위생법 제44조"))
+    t2 = "식품위생법 제44조 제1항을 위반하여 같은 법 제44조"  # 같은 조문을 여러 표기로, 조 → 항 구체화
+    raw = [r.raw for r in ctx.r.resolve(t2).refs if r.article_uid == f"art:{FOOD}:44"][0]
+    spot, _ = E.regex_spot(ctx, t2, f"art:{FOOD}:44", raw)
+    assert spot is not None and spot[0] == 0
+    assert E.regex_spot(ctx, t2, f"art:{FOOD}:99", "제99조") == (None, 0)
+
+
+def test_refs_reads_front_to_back_without_look_ahead(ctx):
+    """처음 낸 자리 방법의 가정: 접두를 잘라 해석한 결과가 전체 결과의 앞부분과 같다(마지막 ref의 조 → 항 구체화만 예외)."""
+    for t in ["식품위생법 제3조부터 제5조까지 및 같은 법 제7조", "식품위생법 제44조 제1항, 제2항 및 같은 법 시행령 제21조",
+              "「식품위생법」(이하 '법'이라 한다) 제31조, 약사법 제5조 및 같은 법 제7조"]:
+        full = [r.article_uid for r in ctx.r.resolve(t).refs]
+        for k in range(1, len(t) + 1):
+            pre = [r.article_uid for r in ctx.r.resolve(t[:k]).refs]
+            assert pre == full[:len(pre)], (t[:k], pre, full)
+
+
+def test_same_spot_shows_longest_item_only(ctx):
+    spans = [(10, 25, "같은 법 제21조제1항", [f"art:{FOOD}:21"]), (14, 21, "법 제21조", [f"art:{FOOD}:21"]),
+             (16, 21, "제21조", [f"art:{FOOD}:21"]), (40, 45, "제9조", [f"art:{FOOD}:9"])]
+    assert E.same_spot(ctx, spans, (12, 25)) == "같은 법 제21조제1항 → 식품위생법 제21조 외 2개"
+    assert E.same_spot(ctx, spans, (30, 35)) == "없음"
+    assert E.same_spot(ctx, [(0, 5, "제9조", [])], (0, 5)) == "제9조 → 해석 안 됨"
+
+
+def test_anchor_key_matches_between_text_and_context():
+    t = "이 사건 【별표 23】에 따르면 식품위생법 제44조를 위반하였다.\n[이유] 끝"
+    a = t.find("식품위생법 제44조"); b = a + len("식품위생법 제44조")
+    k = E.anchor_key(t[max(0, a - 150):a], t[a:b], t[b:b + 60])
+    assert E.anchor_from_context(E.context(t, a, b, 150, 40), "식품위생법 제44조") == k  # 원문 속 【】는 건너뜀
+    assert E.anchor_from_context(E.context(t, a, b, 250, 60), "식품위생법제44조") == k  # 문맥 길이 · 공백이 달라도 같은 키
+
+
+def drow(group, order, verdict, gubun="", mark="", doc="d", ctxt="앞【제1조】뒤", cite="제1조", art="art:1:1"):
+    return {"순서": order, "묶음": group, "문서": doc, "판정": verdict, MARK: mark, E.GUBUN_COL: gubun,
+            "문맥": ctxt, "인용": cite, "조문": art}
+
+
+def test_d1_gubun_rules_and_counts():
+    llm = [drow("LLM만 냄", "본", "맞음")] * 10
+    rgx = [drow("정규식만 냄", "본", "정규식 틀림")] * 3 + [drow("정규식만 냄", "본", "놓침", "정규식도 틀림")] * 2 + \
+          [drow("정규식만 냄", "본", "놓침", "제외 위반+정규식도 틀림")] + [drow("정규식만 냄", "본", "놓침", "제외 위반")] + \
+          [drow("정규식만 냄", "본", "의도된 제외", mark="본문")] * 3
+    t = E.tally_d1(llm + rgx)
+    assert (t["LLM 맞음"], t["판정 수"]) == (16, 20)
+    assert t["정규식 오류 수(정규식 틀림 + 구분 정규식도 틀림)"] == 6 and t["제외 위반"] == 2
+    for bad in ([drow("LLM만 냄", "본", "맞음", "제외 위반")], [drow("정규식만 냄", "본", "정규식 틀림", "정규식도 틀림")],
+                [drow("정규식만 냄", "본", "놓침", "정규식 틀림")]):
+        rows = (bad + llm[1:]) + rgx if bad[0]["묶음"] == "LLM만 냄" else llm + bad + rgx[1:]
+        with pytest.raises(SystemExit):
+            E.tally_d1(rows)
+
+
+def test_dual_agreement_counts_only_rows_judged_in_both():
+    b = [{"순서": "본", "문서": "d", "인용": "제1조", "조문": "art:1:1", "문맥": "앞【제1조】뒤", "판정": "맞음"},
+         {"순서": "예비", "문서": "d", "인용": "제2조", "조문": "art:1:2", "문맥": "앞【제2조】뒤", "판정": ""}]
+    d = [drow("LLM만 냄", "본", "틀림"), drow("LLM만 냄", "본", "맞음", ctxt="앞【제2조】뒤", cite="제2조", art="art:1:2"),
+         drow("정규식만 냄", "본", "놓침")]
+    assert E.dual_agreement(b, d) == {"둘 다 판정한 같은 자리": 1, "일치": 0, "일치율": 0.0}
+
+
+def test_d1_skipped_only_when_b_off_and_d1_blank():
+    blank = [drow("LLM만 냄", "본", "")]
+    assert E.d1_skipped({"결과": "끔"}, blank)
+    assert not E.d1_skipped({"결과": "사용"}, blank)
+    assert not E.d1_skipped({"결과": "끔"}, [drow("LLM만 냄", "본", "맞음")])
+    assert not E.d1_skipped("사람 확인 파일 없음", blank)
+
+
+def test_export_keeps_gubun_and_same_spot_but_not_context(tmp_path):
+    rows = [{**drow("정규식만 냄", "본", "놓침", "제외 위반"), "같은 자리 LLM 결과": "없음", "메모": ""}]
+    E.export_judgments(rows, tmp_path / "d1.csv")
+    head = (tmp_path / "d1.csv").read_text(encoding="utf-8-sig").splitlines()[0]
+    assert E.GUBUN_COL in head and "같은 자리 LLM 결과" in head and "문맥" not in head
+
+
+def test_review_rows_skip_twin_sentences_and_cross_group_spot(ctx):
+    """문서 간 판박이 문장과, LLM만 냄 · 정규식만 냄에 같은 자리가 들어가는 경우는 한 번만 뽑는다."""
+    body = "처분 사유는 구 식품위생법 시행령 제5조에 따라 같은 법 제25조 제1항을 위반한 것이다"
+    docs = {u: {"text": body} for u in ("decc:1", "decc:2")}
+    a = body.find("같은 법 제25조 제1항"); b = a + len("같은 법 제25조 제1항")
+    d1 = {"llm_only": [("decc:1", f"art:{FOOD}:25", "같은 법", "같은 법 제25조 제1항", (a, b), ""),
+                       ("decc:2", f"art:{FOOD}:25", "같은 법", "같은 법 제25조 제1항", (a, b), "")],
+          "regex_only": [("decc:1", f"art:{FOOD_D}:25", "정규식", "같은 법 제25조 제1항", (a, b), "없음")]}
+    sk = Counter()
+    rows = E.review_rows(d1, docs, per_side=1, spare=1, skipped=sk, ctx=ctx)
+    assert [r["묶음"] for r in rows] == ["LLM만 냄"]
+    assert sk == {"LLM만 냄: 같은 묶음 판박이": 1, "정규식만 냄: LLM만 냄과 같은 자리": 1}
 
 
 def test_cost_uses_cached_price():
