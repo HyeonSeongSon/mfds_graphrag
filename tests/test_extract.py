@@ -188,6 +188,45 @@ def test_guard_needs_law_before_position(ctx):
     assert z["article_uids"] == [] and z["notes"]["law 보조 꺼짐"] == 1
 
 
+def test_shorter_items_inside_longer_citation_are_dropped(ctx):
+    """같은 자리를 두 번 해석하지 않는다: "같은 법 제21조제1항" 안의 "법 제21조" · "제21조"(표본 B 확인 파일 5쌍)."""
+    t = "식품위생법 제5조 및 같은 법 제21조제1항에 따라"
+    items = [item("식품위생법 제5조", "식품위생법"), item("같은 법 제21조제1항", "식품위생법"),
+             item("법 제21조", "식품위생법", True), item("제21조", "식품위생법")]
+    res = E.resolve_doc(ctx, t, items)
+    assert res[1]["article_uids"] == [f"art:{FOOD}:21"] and res[1]["is_key"]  # is_key를 옮겨 받음
+    assert res[2]["path"] == res[3]["path"] == "더 긴 인용에 포함(버림)"
+    assert res[2]["article_uids"] == res[3]["article_uids"] == []
+    assert res[1]["notes"]["겹침으로 is_key 옮겨 받음"] == 1
+
+
+def test_partial_overlap_keeps_the_earlier_span(ctx):
+    """일부만 겹치면 같은 인용을 경계만 다르게 자른 것(표본 9쌍): 먼저 시작한 쪽만 남기고 is_key를 옮긴다."""
+    t = "약사법 제5조 및 같은 법 제76조제1항제6호에 따라"
+    res = E.resolve_doc(ctx, t, [item("같은 법 제76조", "약사법"), item("제76조제1항제6호", "약사법", True)])
+    assert res[0]["article_uids"] == [f"art:{DRUG}:76"] and res[0]["is_key"]
+    assert res[1]["path"] == "더 긴 인용에 포함(버림)" and res[1]["article_uids"] == []
+    assert res[1]["notes"]["겹친 자리 버림(일부 겹침, 뒤에서 시작)"] == 1
+
+
+def test_historical_is_refs_only_and_inference_is_recorded(ctx):
+    """PREREG 274행: refs.py가 표시한 구법만 historical(적재 · 확장 제외 조건). refs.py 밖 추정은 historical_inferred(기록만)."""
+    old = "구 식품위생법(2013. 3. 23. 법률 제11690호로 개정되기 전의 것, 이하 '법'이라 한다) 제36조"
+    t = old + ", 같은 법 제75조에 따라 처분한다. 법 제37조를 위반하였고 제38조도 위반하였다. 약사법 제5조"
+    res = E.resolve_doc(ctx, t, [item(old, "식품위생법"), item("같은 법 제75조", "식품위생법"),
+                                 item("법 제37조", "식품위생법"), item("제38조", "식품위생법"), item("약사법 제5조", "약사법")])
+    assert res[0]["historical"] == [f"art:{FOOD}:36"] and res[0]["historical_inferred"] == []
+    for x, n in zip(res[1:4], (75, 37, 38)):  # refs.py는 넘기지 않음 → 추정만
+        assert x["historical"] == [] and x["historical_inferred"] == [f"art:{FOOD}:{n}"]
+    assert res[4]["historical"] == res[4]["historical_inferred"] == []
+    cont = E.resolve_doc(ctx, "구 식품위생법(2013. 3. 23. 법률 제11690호로 개정되기 전의 것) 제36조, 제37조",
+                         [item("제37조", "식품위생법")])[0]
+    assert cont["historical"] == [f"art:{FOOD}:37"]  # 쉼표로 이어진 조문은 refs.py(센티넬)가 표시
+    cur = "구 식품위생법 제36조와 달리 현행 식품위생법 제40조 및 같은 법 제75조"
+    x = E.resolve_doc(ctx, cur, [item("같은 법 제75조", "식품위생법")])[0]
+    assert x["article_uids"] == [f"art:{FOOD}:75"] and x["historical"] == x["historical_inferred"] == []
+
+
 def test_same_article_tokens_are_not_resolved(ctx):
     assert arts(ctx, "같은 조 제2항", item("같은 조 제2항"))["path"] == "같은 조(풀지 않음)"
 
@@ -223,6 +262,61 @@ def test_batch_prepare_refuses_after_submit(tmp_path, monkeypatch):
     (tmp_path / "batch.json").write_text("{}", encoding="utf-8")
     with pytest.raises(SystemExit):
         E.cmd_batch_prepare(None)
+
+
+# ---- 사람 확인 파일: 덮어쓰기 막기 · 채움 집계(PLAN B1 판정 기준 2026-11-27) ----
+
+MARK = "표시(본문 · 구법 · 본문+구법)"
+
+
+def rrow(order, verdict="", mark="", group=None, doc="d"):
+    r = {"순서": order, "문서": doc, "판정": verdict, MARK: mark}
+    if group:
+        r["묶음"] = group
+    return r
+
+
+def test_review_file_is_not_overwritten_once_judged(tmp_path):
+    p = tmp_path / "b_review.csv"
+    E.write_review(p, [rrow("본")])
+    E.write_review(p, [rrow("본")])  # 비어 있으면 다시 만들 수 있음
+    E.write_review(p, [rrow("본", "맞음")])
+    with pytest.raises(SystemExit):
+        E.write_review(p, [rrow("본")])
+
+
+def test_b_tally_fills_holds_from_spares():
+    rows = [rrow("본", "맞음")] * 23 + [rrow("본", "틀림")] * 5 + [rrow("본", "보류", "구법")] * 2
+    rows += [rrow("예비", "보류", "구법"), rrow("예비", "맞음"), rrow("예비", "틀림")] + [rrow("예비")] * 7
+    t = E.tally_b(rows)
+    assert (t["맞음"], t["판정 수"], t["보류"], t["판정한 예비"], t["결과"]) == (24, 30, 3, 3, "사용")
+
+
+def test_b_tally_counts_exhausted_holds_as_not_right():
+    rows = [rrow("본", "맞음")] * 24 + [rrow("본", "보류", "구법")] * 6 + [rrow("예비", "보류", "구법")] * 10
+    t = E.tally_b(rows)
+    assert t["모자란 수(맞음 아님으로 셈)"] == 6 and t["맞음"] == 24 and t["결과"] == "사용"
+    rows = [rrow("본", "맞음")] * 23 + [rrow("본", "보류", "구법")] * 7 + [rrow("예비", "보류", "구법")] * 10
+    assert E.tally_b(rows)["결과"] == "끔"
+
+
+def test_b_tally_rejects_missing_or_invalid_values():
+    with pytest.raises(SystemExit):
+        E.tally_b([rrow("본", "맞음")] * 29 + [rrow("본")])
+    with pytest.raises(SystemExit):
+        E.tally_b([rrow("본", "맞음")] * 29 + [rrow("본", "보류")])  # 보류는 구법 표시가 있어야 함
+    with pytest.raises(SystemExit):
+        E.tally_b([rrow("본", "맞음")] * 29 + [rrow("본", "맞음", "본문, 구법")])
+
+
+def test_d1_tally_counts_regex_wrong_and_reports_body_free_value():
+    llm = [rrow("본", "맞음", group="LLM만 냄")] * 7 + [rrow("본", "맞음", "본문", "LLM만 냄")] * 2 + \
+          [rrow("본", "틀림", group="LLM만 냄")]
+    rgx = [rrow("본", "의도된 제외", "본문", "정규식만 냄")] * 3 + [rrow("본", "정규식 틀림", group="정규식만 냄")] * 2 + \
+          [rrow("본", "놓침", group="정규식만 냄")] * 5
+    t = E.tally_d1(llm + rgx)
+    assert (t["LLM 맞음"], t["판정 수"], t["비율"]) == (14, 20, 0.7) and t["결과(B가 사용일 때)"] == "정규식 결과"
+    assert t["본문 뺀 값(기록)"] == {"LLM 맞음": 9, "판정 수": 15, "비율": 0.6} and t["정규식 틀림"] == 2
 
 
 def test_cost_uses_cached_price():

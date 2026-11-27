@@ -11,6 +11,7 @@
     python scripts/extract.py inputs                  # 대상 문서 수 · 입력 글자 수 · 설정 해시
     python scripts/extract.py sample [--n 100]        # 시드 표본을 표준 API로 → sample.jsonl, 판정 A · B 지표, D1 확인 파일
     python scripts/extract.py check FILE.jsonl [FILE2.jsonl] [--all] [--resolved OUT.jsonl] [--review OUT.csv]
+    python scripts/extract.py review-tally            # 판정이 채워진 b_review · d1_review → 판정 B · D1, eval/extract_review/로 내보냄
     python scripts/extract.py batch-prepare           # batch_input.jsonl(이미 제출했으면 멈춤)
     python scripts/extract.py batch-submit            # 업로드 → 배치 생성(batch.json)
     python scripts/extract.py batch-status
@@ -106,6 +107,7 @@ TOKEN = re.compile(r"^(?:이\s?)?(?P<tok>법|영|규칙|시행령|시행규칙)(
 BARE = re.compile(r"^제\s?\d")
 SAME = re.compile(r"^(?:같은\s?[조항호]|동[조항호]|이\s?조)")
 AFTER_BAD = re.compile(r"\s?의\s?\d|\d")
+ARTNO = re.compile(r"제\s?(\d+)\s?조(?:\s?의\s?(\d+))?")
 TIER = {"법": None, "영": "시행령", "시행령": "시행령", "규칙": "시행규칙", "시행규칙": "시행규칙"}
 
 
@@ -279,8 +281,14 @@ class Ctx:
         self.r = Resolver(self.laws, self.articles)
         self.r0 = Resolver(self.laws, None)
         self.family = defaultdict(set)
+        spaced = defaultdict(set)
         for name, lid in self.laws.names.items():
             self.family[self.laws.root(lid)].add(name.replace(" ", ""))
+            spaced[self.laws.root(lid)].add(name)
+        # 법령 가족 이름을 글자 사이 공백 유무와 상관없이 찾는 정규식(가장 긴 이름 우선)
+        self.family_rx = {root: re.compile("|".join(r"\s?".join(map(re.escape, n.replace(" ", "")))
+                                                    for n in sorted(ns, key=len, reverse=True)))
+                          for root, ns in spaced.items()}
 
     def law_id(self, name: str) -> str | None:
         """모델 law → 법령ID. 공백 · 「」 · 앞 "구" 무시."""
@@ -324,13 +332,30 @@ def segment_start(text: str, pos: int) -> int:
     return 0 if i < 0 else i + len(CUT)
 
 
-def sentinel(ctx: Ctx, prefix: str, token: str) -> tuple[str | None, str]:
-    """앞부분 + 토큰 + 제99999조를 조문 검사 없이 해석 → (법령ID, 실패 사유)."""
+def sentinel(ctx: Ctx, prefix: str, token: str) -> tuple[str | None, str, bool]:
+    """앞부분 + 토큰 + 제99999조를 조문 검사 없이 해석 → (법령ID, 실패 사유, refs의 구법 표시)."""
     res = ctx.r0.resolve(f"{prefix}{token}{SENTINEL}" if not token else f"{prefix}{token} {SENTINEL}")
     for ref in reversed(res.refs):
         if ref.article_uid.endswith(":99999"):
-            return ref.law_id, ""
-    return None, (res.failures[-1].reason if res.failures else "none")
+            return ref.law_id, "", ref.historical
+    return None, (res.failures[-1].reason if res.failures else "none"), False
+
+
+OLD_MARK = re.compile(r"구\s?「?$")
+
+
+def old_before(ctx: Ctx, text: str, pos: int, law_id: str, lo: int = 0) -> bool:
+    """pos 앞(lo부터)에서 마지막으로 나온 그 법령 가족 이름 앞에 "구"가 붙었는지. refs.py는 "구 X법(…) 제36조" 뒤의
+    "같은 법 · 맨 제N조"에 구법 표시를 넘기지 않는다. 이 추정은 `historical_inferred`로 **기록만** 한다(PREREG 274행은
+    refs.py가 표시한 것만 그래프 확장 · 정답 템플릿에서 빼라고 정함. 표본 17건 중 오탐 있음: "구 식품위생법 시행규칙" 뒤
+    "법 제36조")."""
+    rx = ctx.family_rx.get(ctx.laws.root(law_id))
+    if rx is None:
+        return False
+    last = None
+    for m in rx.finditer(text, lo, pos):
+        last = m
+    return bool(last and OLD_MARK.search(text[max(lo, last.start() - 3):last.start()]))
 
 
 def target_law(ctx: Ctx, law_id: str, tier: str | None) -> str | None:
@@ -353,30 +378,43 @@ def guard(ctx: Ctx, text: str, pos: int, law_id: str) -> str:
     return "뒤에만 있음" if any(n in flat(text) for n in names) else "입력에 없음"
 
 
-def resolve_item(ctx: Ctx, text: str, item: dict, use_law: bool = True) -> dict:
-    """항목 하나 → {path, refs(uid 목록), article_uids, notes(Counter), span(첫 자리), sentinel_laws}."""
+def is_short(t: str) -> bool:
+    return bool(TOKEN.match(t) or BARE.match(t))
+
+
+def resolve_item(ctx: Ctx, text: str, item: dict, use_law: bool = True,
+                 spans: tuple[list[tuple[int, int]], bool] | None = None) -> dict:
+    """항목 하나 → {path, refs(uid 목록), article_uids, notes(Counter), span(첫 자리), sentinel_laws, assist}.
+    spans: resolve_doc이 다른 항목과의 겹침을 정리한 자리(없으면 여기서 찾음)."""
     t = item["text"]
     notes: Counter = Counter()
     out = {"text": t, "law": item["law"], "is_key": item["is_key"], "path": "", "refs": [], "article_uids": [],
-           "notes": notes, "span": None, "sentinel_laws": [], "assist": []}
+           "historical": [], "historical_inferred": [], "notes": notes, "span": None, "sentinel_laws": [], "assist": []}
 
-    def add(res) -> None:
+    def add(res, hist: bool = False, inferred: bool = False) -> None:
+        """historical: refs.py가 표시한 구법(해석 결과의 표시 또는 hist=센티넬 결과의 표시) — 적재 때 엣지 historical.
+        historical_inferred: refs.py 밖 추정(기록만, 적재 조건에 쓰지 않음)."""
         for ref in res.refs:
             if ref.uid not in out["refs"]:
                 out["refs"].append(ref.uid)
             if ref.article_uid not in out["article_uids"]:
                 out["article_uids"].append(ref.article_uid)
+            if (ref.historical or hist) and ref.article_uid not in out["historical"]:
+                out["historical"].append(ref.article_uid)
+                notes["구법 표시(refs.py)"] += 1
+            elif inferred and not (ref.historical or hist) and ref.article_uid not in out["historical_inferred"]:
+                out["historical_inferred"].append(ref.article_uid)
+                notes["구법 추정(기록만)"] += 1
 
     if SAME.match(t):
         out["path"] = "같은 조(풀지 않음)"
         return out
     rel, tok, bare = REL.match(t), TOKEN.match(t), BARE.match(t)
-    short = bool(tok or bare)
-    spans, recovered = find_spans(text, t, short)
+    spans, recovered = spans if spans is not None else find_spans(text, t, is_short(t))
     if recovered:
         notes["공백 복구"] += 1
     if not spans:
-        out["path"] = "입력에 없음(버림)"
+        out["path"] = "입력에 없음(버림)" if not item.get("_covered") else "더 긴 인용에 포함(버림)"
         return out
     out["span"] = spans[0]
     model_law = ctx.law_id(item["law"]) if item["law"] else None
@@ -402,10 +440,10 @@ def resolve_item(ctx: Ctx, text: str, item: dict, use_law: bool = True) -> dict:
             notes["경로 판정 불일치(버림)"] += 1
             continue
         rest = piece[head.end():] if (rel or tok) else piece
-        law = None
+        law, s_hist = None, False
         if rel:
             out["path"] = "같은 법"
-            law, why = sentinel(ctx, text[seg:a], head.group(0))
+            law, why, s_hist = sentinel(ctx, text[seg:a], head.group(0))
             out["sentinel_laws"].append(law)
             if law is not None and not head.group("tier") and ctx.laws.root(law) != law:
                 # refs.py는 "같은 법 시행규칙 제X조" 뒤의 "같은 법"을 시행규칙으로 읽는다. "같은 법"은 법률이다(표본 7건, 2026-11-27)
@@ -418,14 +456,14 @@ def resolve_item(ctx: Ctx, text: str, item: dict, use_law: bool = True) -> dict:
                 notes["센티넬 no_context"] += 1
         elif bare:
             out["path"] = "맨 제N조"
-            law, why = sentinel(ctx, text[seg:a], "")
+            law, why, s_hist = sentinel(ctx, text[seg:a], "")
             if law is None and why != "no_context":
                 notes[f"센티넬 {why}(버림)"] += 1
                 continue
         else:
             out["path"] = "법·영·규칙"
         if law is not None:
-            add(ctx.r.resolve(rest, context_law=law))
+            add(ctx.r.resolve(rest, context_law=law), s_hist, old_before(ctx, text, a, law, seg))
             notes["센티넬로 해석"] += 1
             continue
         # law 보조
@@ -454,7 +492,8 @@ def resolve_item(ctx: Ctx, text: str, item: dict, use_law: bool = True) -> dict:
             notes["law 보조: 대상 단계 없음"] += 1
             continue
         res = ctx.r.resolve(rest, context_law=dst)
-        add(res)
+        hist = bool(re.match(r"^\s*구\s", item["law"])) or old_before(ctx, text, a, dst)
+        add(res, inferred=hist)
         notes["law 보조로 해석" if res.refs else "law 보조: 해석 실패"] += 1
         if res.refs:
             out["assist"].append({"span": (a, b), "law": dst, "article_uids": res.article_uids})
@@ -462,7 +501,40 @@ def resolve_item(ctx: Ctx, text: str, item: dict, use_law: bool = True) -> dict:
 
 
 def resolve_doc(ctx: Ctx, text: str, items: list[dict], use_law: bool = True) -> list[dict]:
-    return [resolve_item(ctx, text, it, use_law) for it in items]
+    """항목마다 자리를 찾은 뒤, 다른 항목의 더 긴 자리 안에 들어간 자리는 버린다(같은 자리를 두 번 해석하지 않게.
+    예: "같은 법 제21조제1항" 안의 "법 제21조" · "제21조"). 자리가 모두 버려진 항목은 "더 긴 인용에 포함"."""
+    found = [find_spans(text, it["text"], is_short(it["text"]))
+             if not SAME.match(it["text"]) else ([], False) for it in items]
+    every = [(a, b, i) for i, (sp, _) in enumerate(found) for a, b in sp]
+    out, moved = [], set()
+    for i, (it, (sp, rec)) in enumerate(zip(items, found)):
+        keep, n_cover, n_part = [], 0, 0
+        for a, b in sp:
+            cover = [j for a2, b2, j in every if j != i and a2 <= a and b <= b2 and (b2 - a2) > (b - a)]
+            # 일부만 겹치면 같은 인용을 경계만 다르게 자른 것(표본 9쌍 모두): 먼저 시작한 자리(법령명 · 같은 법이 붙은 쪽)만 남긴다
+            part = [j for a2, b2, j in every if j != i and a2 < a < b2 < b]
+            if cover or part:
+                n_cover, n_part = n_cover + bool(cover), n_part + (not cover)
+                if it["is_key"]:
+                    moved.add((cover or part)[0])  # 버린 자리의 is_key는 남는 쪽으로 옮긴다
+            else:
+                keep.append((a, b))
+        x = resolve_item(ctx, text, {**it, "_covered": bool(sp) and not keep}, use_law, (keep, rec))
+        if n_cover:
+            x["notes"]["겹친 자리 버림(더 긴 인용에 포함)"] += n_cover
+        if n_part:
+            x["notes"]["겹친 자리 버림(일부 겹침, 뒤에서 시작)"] += n_part
+            mine = ARTNO.findall(it["text"])
+            for a2, b2, j in every:
+                if j != i and any(a2 < a < b2 < b for a, b in sp) and ARTNO.findall(items[j]["text"])[:1] != mine[:1]:
+                    x["notes"]["일부 겹침 버림: 다른 조 번호(확인 필요)"] += 1  # 같은 인용이 아닐 수 있음
+                    break
+        out.append(x)
+    for j in moved:
+        if not out[j]["is_key"]:
+            out[j]["is_key"] = True
+            out[j]["notes"]["겹침으로 is_key 옮겨 받음"] += 1
+    return out
 
 
 def b_agreement(ctx: Ctx, resolved: list[dict]) -> Counter:
@@ -624,12 +696,14 @@ def check(records: list[dict], docs: dict[str, dict], expected: set[str], n_tota
     return rep, resolved_docs, d1
 
 
-def review_rows(d1: dict, docs: dict[str, dict], per_side: int = REVIEW_PER_SIDE) -> list[dict]:
-    """D1 사람 확인 묶음(시드 순서): LLM만 낸 조문 · 정규식만 낸 조문 각 per_side. 문맥은 앞뒤 80자."""
+def review_rows(d1: dict, docs: dict[str, dict], per_side: int = REVIEW_PER_SIDE, spare: int = 5) -> list[dict]:
+    """D1 사람 확인 묶음(시드 순서): LLM만 낸 조문 · 정규식만 낸 조문 각 per_side + 예비 spare. 조문(art:)만 — 별표(anx:)는
+    REFERENCES 엣지가 되지 않으므로 뺀다(2026-11-27, 판정 전). 보류가 나오면 같은 묶음의 예비를 위에서부터 같은 수만큼
+    판정해 수를 채운다(예비가 모자라면 있는 만큼). 문맥은 앞 150자 · 뒤 60자."""
     ctx = snapshot_ctx()
     rows = []
-    for side, label in (("llm_only", "LLM만 냄"), ("regex_only", "정규식만 냄")):
-        cands = sorted(set(d1[side]), key=lambda x: (x[0], x[1], x[3]))
+    for side, label, values in (("llm_only", "LLM만 냄", "맞음 · 틀림 · 보류"), ("regex_only", "정규식만 냄", "놓침 · 의도된 제외 · 정규식 틀림 · 보류")):
+        cands = sorted({c for c in d1[side] if c[1].startswith("art:")}, key=lambda x: (x[0], x[1], x[3]))
         random.Random(f"{SEED}:extract_d1:{side}").shuffle(cands)
         picked, seen = [], set()
         for c in cands:
@@ -637,9 +711,9 @@ def review_rows(d1: dict, docs: dict[str, dict], per_side: int = REVIEW_PER_SIDE
                 continue
             seen.add((c[0], c[1]))
             picked.append(c)
-            if len(picked) == per_side:
+            if len(picked) == per_side + spare:
                 break
-        for uid, art, path, text, span in picked:
+        for k, (uid, art, path, text, span) in enumerate(picked):
             t = docs[uid]["text"]
             if span is None:  # 자리를 못 찾으면 그 조문 번호가 처음 나온 자리
                 num = art.split(":")[2].partition("-")[0]
@@ -647,14 +721,20 @@ def review_rows(d1: dict, docs: dict[str, dict], per_side: int = REVIEW_PER_SIDE
                 span = (m.start(), m.end()) if m else (0, 0)
             a, b = span
             law = ctx.laws.title.get(art.split(":")[1], "")
-            rows.append({"묶음": label, "문서": uid, "조문": art, "법령": law, "경로": path, "인용": text,
-                         "문맥": t[max(0, a - 80):a] + "【" + t[a:b] + "】" + t[b:b + 80],
-                         "판정(맞음 · 틀림 · 의도된 제외)": "", "메모": ""})
+            rows.append({"순서": "본" if k < per_side else "예비", "묶음": label, "고를 값": values, "문서": uid,
+                         "조문": art, "법령": law, "경로": path, "인용": text,
+                         "문맥": context(t, a, b, 150, 60), "판정": "", "표시(본문 · 구법 · 본문+구법)": "", "메모": ""})
     return rows
 
 
-def b_review_rows(resolved_docs: list[dict], docs: dict[str, dict], n: int = 30) -> list[dict]:
-    """판정 B 사람 확인(90~95%일 때): law 보조로 해석된 자리 n건(시드 순서). 문맥은 앞 150자 · 뒤 40자."""
+def context(t: str, a: int, b: int, before: int, after: int) -> str:
+    """사람 확인용 문맥(한 줄): 필드 사이 줄바꿈은 " ⏎ "로 바꾼다(텍스트 편집기 줄 번호가 행 번호와 어긋나지 않게)."""
+    return (t[max(0, a - before):a] + "【" + t[a:b] + "】" + t[b:b + after]).replace("\n", " ⏎ ")
+
+
+def b_review_rows(resolved_docs: list[dict], docs: dict[str, dict], n: int = 30, spare: int = 10) -> list[dict]:
+    """판정 B 사람 확인(90~95%일 때): law 보조로 해석된 자리 n건 + 예비 spare(시드 순서). 보류가 나오면 예비를 위에서부터
+    같은 수만큼 판정해 30건을 채운다. 문맥은 앞 150자 · 뒤 40자."""
     ctx = snapshot_ctx()
     cands = []
     for row in resolved_docs:
@@ -664,11 +744,14 @@ def b_review_rows(resolved_docs: list[dict], docs: dict[str, dict], n: int = 30)
     cands.sort(key=lambda c: (c[0], c[1]))
     random.Random(f"{SEED}:extract_b").shuffle(cands)
     rows = []
-    for uid, (a, b), text, law, dst, arts in cands[:n]:
+    for k, (uid, (a, b), text, law, dst, arts) in enumerate(cands[:n + spare]):
         t = docs[uid]["text"]
-        rows.append({"문서": uid, "인용": text, "모델 law": law, "해석 법령": ctx.laws.title.get(dst, dst),
-                     "조문": " ".join(arts), "문맥": t[max(0, a - 150):a] + "【" + t[a:b] + "】" + t[b:b + 40],
-                     "판정(맞음 · 틀림)": "", "메모": ""})
+        rows.append({"순서": "본" if k < n else "예비", "고를 값": "맞음 · 틀림 · 보류", "문서": uid, "인용": text,
+                     "모델 law": law,
+                     "해석 법령": ctx.laws.title.get(dst, dst),
+                     "조문": " ".join(x for x in arts if not x.startswith("anx:")),
+                     "별표(판정 안 함)": " ".join(x for x in arts if x.startswith("anx:")),
+                     "문맥": context(t, a, b, 150, 40), "판정": "", "표시(본문 · 구법 · 본문+구법)": "", "메모": ""})
     return rows
 
 
@@ -687,12 +770,111 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
     path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
 
 
+def read_review(path: Path) -> list[dict]:
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        return list(csv.DictReader(f))
+
+
 def write_review(path: Path, rows: list[dict]) -> None:
+    """사람 확인 파일을 쓴다. 이미 판정이 하나라도 들어 있으면 덮어쓰지 않고 멈춘다(사람 입력 보호)."""
+    if path.exists() and any((r.get("판정") or "").strip() for r in read_review(path)):
+        raise SystemExit(f"{path.name}에 판정이 들어 있다. 덮어쓰지 않는다(옮기거나 지운 뒤 다시 실행)")
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8-sig", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else ["묶음"])
         w.writeheader()
         w.writerows(rows)
+
+
+# ---- 사람 확인 집계(PLAN B1 판정 B · D1, 2026-11-27 판정 기준) ---------------------------
+
+VALUES = {"B": {"맞음", "틀림", "보류"}, "LLM만 냄": {"맞음", "틀림", "보류"},
+          "정규식만 냄": {"놓침", "의도된 제외", "정규식 틀림", "보류"}}
+MARKS = {"", "본문", "구법", "본문+구법"}
+B_N, B_PASS, D1_N, D1_RATE = 30, 24, REVIEW_PER_SIDE, 0.80
+
+
+def fill(rows: list[dict], n: int, kind: str) -> dict:
+    """채움: 본 행의 보류 1건마다 예비를 위에서부터 판정해 채운다(예비도 보류면 다음 예비). 필요한 행이 비었거나
+    값이 고를 값 밖이면 멈춘다. → {judged, holds, used_spare, shortfall}."""
+    main = [r for r in rows if r["순서"] == "본"]
+    spare = [r for r in rows if r["순서"] == "예비"]
+    if len(main) != n:
+        raise SystemExit(f"{kind}: 본 행이 {len(main)}건(기대 {n})")
+
+    def value(r: dict) -> str:
+        v, m = (r.get("판정") or "").strip(), (r.get("표시(본문 · 구법 · 본문+구법)") or "").strip()
+        if not v:
+            raise SystemExit(f"{kind}: 판정이 빈 행이 있다({r['순서']} {r['문서']})")
+        if v not in VALUES[kind]:
+            raise SystemExit(f"{kind}: 고를 값 밖 판정 {v!r}({r['문서']})")
+        if m not in MARKS:
+            raise SystemExit(f"{kind}: 표시 값 {m!r}은 본문 · 구법 · 본문+구법 중 하나여야 한다({r['문서']})")
+        if v == "보류" and "구법" not in m:
+            raise SystemExit(f"{kind}: 보류는 구법 확인 불가일 때만(표시에 구법 필요, {r['문서']})")
+        return v
+
+    judged, holds, need = [], 0, 0
+    for r in main:
+        if value(r) == "보류":
+            holds, need = holds + 1, need + 1
+        else:
+            judged.append(r)
+    used = 0
+    for r in spare:
+        if need == 0:
+            break
+        used += 1
+        if value(r) == "보류":
+            holds += 1
+            continue
+        judged.append(r)
+        need -= 1
+    return {"judged": judged, "holds": holds, "used_spare": used, "shortfall": need}
+
+
+def tally_b(rows: list[dict]) -> dict:
+    f = fill(rows, B_N, "B")
+    right = sum(r["판정"].strip() == "맞음" for r in f["judged"])  # 예비가 떨어져 모자란 수는 맞음이 아님으로 셈
+    return {"맞음": right, "판정 수": len(f["judged"]), "보류": f["holds"], "판정한 예비": f["used_spare"],
+            "모자란 수(맞음 아님으로 셈)": f["shortfall"], "기준": f"{B_PASS}건 이상", "결과": "사용" if right >= B_PASS else "끔"}
+
+
+def tally_d1(rows: list[dict]) -> dict:
+    sides = {k: fill([r for r in rows if r["묶음"] == k], D1_N, k) for k in ("LLM만 냄", "정규식만 냄")}
+
+    def ok(r: dict) -> bool:
+        v = r["판정"].strip()
+        return v == "맞음" if r["묶음"] == "LLM만 냄" else v in ("의도된 제외", "정규식 틀림")
+
+    def rate(rs: list[dict]) -> tuple[int, int, float | None]:
+        good = sum(ok(r) for r in rs)
+        return good, len(rs), (round(good / len(rs), 3) if rs else None)
+
+    every = [r for s in sides.values() for r in s["judged"]]
+    good, n, r_all = rate(every)
+    body_free = [r for r in every if "본문" not in (r.get("표시(본문 · 구법 · 본문+구법)") or "")]
+    good2, n2, r_free = rate(body_free)
+    return {"LLM 맞음": good, "판정 수": n, "비율": r_all, "기준": f"{D1_RATE:.0%}",
+            "결과(B가 사용일 때)": "LLM 결과" if r_all is not None and r_all >= D1_RATE else "정규식 결과",
+            "본문 뺀 값(기록)": {"LLM 맞음": good2, "판정 수": n2, "비율": r_free},
+            **{f"{k} 보류 · 판정한 예비 · 모자람": (s["holds"], s["used_spare"], s["shortfall"]) for k, s in sides.items()},
+            "정규식 틀림": sum(r["판정"].strip() == "정규식 틀림" for r in every)}
+
+
+EXPORT_COLS = ["순서", "묶음", "문서", "인용", "모델 law", "해석 법령", "법령", "조문", "경로", "판정",
+               "표시(본문 · 구법 · 본문+구법)", "메모"]
+
+
+def export_judgments(rows: list[dict], path: Path) -> str:
+    """판정 결과를 추적되는 위치에 내보낸다. 문맥(원문) 칸은 빼고 인용 문자열 · 해석 결과 · 판정만(PLAN 79행 규칙)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cols = [c for c in EXPORT_COLS if c in rows[0]]
+    with path.open("w", encoding="utf-8-sig", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+    return sha256(path)
 
 
 def report(records: list[dict], docs: list[dict], expected: set[str], resolved: Path | None,
@@ -749,6 +931,21 @@ def cmd_sample(a: argparse.Namespace) -> None:
     rep = report(recs, docs, {d["uid"] for d in pick}, OUT / "sample_resolved.jsonl", OUT / "d1_review.csv")
     rep["표본 종류별"] = dict(Counter(d["kind"] for d in pick))
     print(json.dumps(rep, ensure_ascii=False, indent=1))
+
+
+def cmd_review_tally(a: argparse.Namespace) -> None:
+    """판정이 채워진 확인 파일 → 판정 B · D1 결과, 그리고 문맥을 뺀 판정 파일을 eval/extract_review/에 내보내고 해시."""
+    out = {}
+    b_path, d_path = OUT / "b_review.csv", OUT / "d1_review.csv"
+    dest = ROOT / "eval" / "extract_review"
+    if b_path.exists():
+        rows = read_review(b_path)
+        out["B"] = tally_b(rows)
+        out["B 내보냄"] = f"b_judgments.csv sha256 {export_judgments(rows, dest / 'b_judgments.csv')[:12]}"
+    rows = read_review(d_path)
+    out["D1"] = tally_d1(rows)
+    out["D1 내보냄"] = f"d1_judgments.csv sha256 {export_judgments(rows, dest / 'd1_judgments.csv')[:12]}"
+    print(json.dumps(out, ensure_ascii=False, indent=1))
 
 
 def cmd_check(a: argparse.Namespace) -> None:
@@ -833,6 +1030,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("inputs").set_defaults(f=cmd_inputs)
+    sub.add_parser("review-tally", help="판정 B · D1 집계 + 문맥 뺀 판정 파일 내보내기").set_defaults(f=cmd_review_tally)
     s = sub.add_parser("sample")
     s.add_argument("--n", type=int, default=100)
     s.set_defaults(f=cmd_sample)
